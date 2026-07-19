@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RLSBB Clean Board v11 - Banner Release Picker
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.1.0
-// @description  Wide-banner RLSBB cleaner with RapidGator-focused cards, fixed right recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
+// @version      1.2.0
+// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, fixed right recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
 // @match        https://www.rlsbb.in/*
@@ -84,6 +84,7 @@
     const recommendedItems = extractRecommendedItems(document);
 
     injectStyles();
+    if (!isPostPage) injectLightbox();
     document.body.classList.add('rbb-clean-body', isPostPage ? 'rbb-post-mode' : 'rbb-feed-mode');
 
     nextPageUrl = findNextPageUrl(document);
@@ -284,8 +285,8 @@
     `;
   }
 
-  function appendArticle(article, grid) {
-    const data = extractArticle(article);
+  function appendArticle(article, grid, doc = document) {
+    const data = extractArticle(article, doc);
 
     if (!data.id || seenIds.has(data.id)) return;
     seenIds.add(data.id);
@@ -322,7 +323,12 @@
       `
       : '';
 
-    const commentPanel = isPostPage ? makeCommentLinksPanel(data.commentRgLinks) : '';
+    // On post pages the comment RapidGator links are already scrapable from the live DOM.
+    // On grid cards (homepage/search archives) real comments aren't rendered, so this stays
+    // an empty slot until the lightbox fetches the post and fills it in (see loadComments()).
+    const commentPanel = data.commentRgLinks.length
+      ? makeCommentLinksPanel(data.commentRgLinks)
+      : '';
 
     card.innerHTML = `
       <a class="rbb-image" href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">
@@ -360,7 +366,7 @@
           ${showAll}
         </section>
 
-        ${commentPanel}
+        <div class="rbb-comment-rg-slot" data-comment-rg-slot>${commentPanel}</div>
 
         <details class="rbb-comments" data-comments-url="${escAttr(data.commentsUrl || data.url + '#comments')}" ${isPostPage ? 'open' : ''}>
           <summary>${esc(data.commentsText || 'Comments')}</summary>
@@ -402,6 +408,15 @@
       if (isPostPage) {
         setTimeout(() => showExistingComments(comments), 0);
       }
+    }
+
+    if (!isPostPage) {
+      card.classList.add('rbb-card-clickable');
+      card.addEventListener('click', event => {
+        // let real links (RG/NFO/torrent/open-post) and native <details> toggles behave normally
+        if (event.target.closest('a, summary')) return;
+        openLightbox(card, data);
+      });
     }
 
     grid.appendChild(card);
@@ -536,10 +551,10 @@
     `;
   }
 
-  function extractArticle(article) {
+  function extractArticle(article, doc = document) {
     const titleLink = article.querySelector('.entry-title a, h1 a, h2 a, a[rel="bookmark"]');
     const titleNode = article.querySelector('.entry-title, h1, h2');
-    const title = cleanText(titleLink?.textContent || titleNode?.textContent || document.title.replace(/– ReleaseBB| - ReleaseBB/i, '') || 'Untitled');
+    const title = cleanText(titleLink?.textContent || titleNode?.textContent || doc.title.replace(/– ReleaseBB| - ReleaseBB/i, '') || 'Untitled');
 
     const url = abs(titleLink?.href || location.href);
     const id = article.id || url;
@@ -554,14 +569,14 @@
       .map(a => cleanText(a.textContent))
       .filter(Boolean);
 
-    const tag = cleanText(document.querySelector('.postTags a')?.textContent || article.querySelector('.postTags a')?.textContent || '');
-    const comments = document.querySelector('.postComments a, a[href$="#comments"], a[href*="#comments"]') || article.querySelector('.postComments a, a[href$="#comments"], a[href*="#comments"]');
+    const tag = cleanText(doc.querySelector('.postTags a')?.textContent || article.querySelector('.postTags a')?.textContent || '');
+    const comments = doc.querySelector('.postComments a, a[href$="#comments"], a[href*="#comments"]') || article.querySelector('.postComments a, a[href$="#comments"], a[href*="#comments"]');
 
     const firstImg = findMainImage(content);
     const releases = extractReleases(content);
 
     const rgLinks = dedupeLinks(releases.flatMap(release => release.rgLinks));
-    const commentRgLinks = extractCommentRapidGatorLinks(document);
+    const commentRgLinks = extractCommentRapidGatorLinks(doc);
 
     const postedAbsolute = extractAbsoluteDate(meta, article);
     const postedDate = parsePostedDate(postedAbsolute);
@@ -1285,7 +1300,7 @@
       nextPageUrl = findNextPageUrl(doc);
 
       [...doc.querySelectorAll('#post-wrapper article, article.post')].forEach(article => {
-        appendArticle(article, grid);
+        appendArticle(article, grid, doc);
       });
 
       applyFiltersAndSort();
@@ -1319,6 +1334,21 @@
         body.appendChild(comments.cloneNode(true));
       }
 
+      // grid/lightbox cards don't have real comments in their own DOM, so the comment-RG
+      // panel is only fillable once we've fetched the actual post page here
+      const slot = details.closest('.rbb-card')?.querySelector('[data-comment-rg-slot]');
+      if (slot && !slot.childElementCount) {
+        const rgLinks = extractCommentRapidGatorLinks(doc);
+        if (rgLinks.length) {
+          slot.innerHTML = makeCommentLinksPanel(rgLinks);
+          const rgDetails = slot.querySelector('.rbb-comment-rg');
+          if (rgDetails) {
+            rgDetails.open = true;
+            rgDetails.classList.add('rbb-force-open');
+          }
+        }
+      }
+
       details.dataset.loaded = '1';
     } catch {
       body.textContent = 'Could not load comments.';
@@ -1343,6 +1373,65 @@
     });
   }
 
+  function injectLightbox() {
+    if (document.getElementById('rbb-lightbox-overlay')) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'rbb-lightbox-overlay';
+    overlay.className = 'rbb-lightbox-overlay';
+    overlay.innerHTML = `
+      <div class="rbb-lightbox-panel">
+        <button type="button" class="rbb-lightbox-close" aria-label="Close">&times;</button>
+        <div class="rbb-lightbox-body"></div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener('click', event => {
+      if (event.target === overlay) closeLightbox();
+    });
+
+    overlay.querySelector('.rbb-lightbox-close').addEventListener('click', closeLightbox);
+
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && overlay.classList.contains('open')) closeLightbox();
+    });
+  }
+
+  function openLightbox(sourceCard, data) {
+    const overlay = document.getElementById('rbb-lightbox-overlay');
+    if (!overlay) return;
+
+    const body = overlay.querySelector('.rbb-lightbox-body');
+    const clone = sourceCard.cloneNode(true);
+    clone.classList.add('rbb-detail-card');
+
+    clone.querySelectorAll('.rbb-comments, .rbb-all-versions').forEach(details => {
+      details.open = true;
+      details.classList.add('rbb-force-open');
+    });
+
+    body.innerHTML = '';
+    body.appendChild(clone);
+    overlay.scrollTop = 0;
+    overlay.classList.add('open');
+    document.body.style.overflow = 'hidden';
+
+    // cloning drops listeners, so kick off the comment fetch directly rather than
+    // waiting for a toggle event that will never fire on this detached <details>
+    const commentsDetails = clone.querySelector('.rbb-comments');
+    if (commentsDetails) loadComments(commentsDetails);
+  }
+
+  function closeLightbox() {
+    const overlay = document.getElementById('rbb-lightbox-overlay');
+    if (!overlay) return;
+
+    overlay.classList.remove('open');
+    document.body.style.overflow = '';
+  }
+
   function hideOriginalPageSafely() {
     const app = document.querySelector('#rbb-clean');
 
@@ -1365,6 +1454,7 @@
       '#post-wrapper',
       '.pagination',
       '.nav-links',
+      '.page-header',
       '#wpfront-scroll-top-container'
     ];
 
@@ -1835,8 +1925,9 @@
         grid-row: 1 !important;
         min-width: 0;
         display: grid;
-        grid-template-columns: 1fr;
-        gap: 14px;
+        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+        gap: 12px;
+        align-items: start;
       }
 
       .rbb-side {
@@ -1908,11 +1999,11 @@
       .rbb-card {
         position: relative;
         overflow: hidden;
-        border-radius: 20px;
+        border-radius: 16px;
         border: 1px solid var(--rbb-border);
         background: linear-gradient(155deg, rgba(255,255,255,.074), rgba(255,255,255,.028));
         backdrop-filter: blur(18px);
-        box-shadow: var(--rbb-shadow);
+        box-shadow: 0 12px 34px rgba(0,0,0,.30);
       }
 
       .rbb-card[hidden],
@@ -1920,12 +2011,34 @@
         display: none !important;
       }
 
+      .rbb-card-clickable {
+        cursor: pointer;
+        transition: transform .12s ease, border-color .12s ease;
+      }
+
+      .rbb-card-clickable:hover {
+        transform: translateY(-2px);
+        border-color: rgba(119,188,255,.30);
+      }
+
+      /* dense grid card is the default; .rbb-detail-card (post page + lightbox) restores the spacious layout */
       .rbb-image {
-        display: block;
-        width: calc(100% - 20px);
-        aspect-ratio: 520 / 170;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: calc(100% - 16px);
+        aspect-ratio: 16 / 6;
         overflow: hidden;
         background: #071019;
+        border-radius: 12px;
+        margin: 8px 8px 0;
+        color: var(--rbb-faint);
+        font-size: 10px;
+      }
+
+      .rbb-detail-card .rbb-image {
+        width: calc(100% - 20px);
+        aspect-ratio: 520 / 170;
         border-radius: 16px;
         margin: 10px 10px 0;
       }
@@ -1946,28 +2059,37 @@
 
       .rbb-no-image {
         height: 100%;
-        min-height: 170px;
+        min-height: 60px;
         display: grid;
         place-items: center;
         color: var(--rbb-muted);
         font-size: 12px;
       }
 
+      .rbb-detail-card .rbb-no-image { min-height: 170px; }
+
       .rbb-content {
-        padding: 16px;
+        padding: 11px 12px 12px;
         min-width: 0;
       }
 
+      .rbb-detail-card .rbb-content { padding: 16px; }
+
       .rbb-card-title {
-        margin: 0 0 8px !important;
-        font-size: 22px !important;
-        line-height: 1.16 !important;
-        letter-spacing: -.02em;
+        margin: 0 0 6px !important;
+        font-size: 14px !important;
+        font-weight: 850 !important;
+        line-height: 1.25 !important;
+        letter-spacing: -.01em;
+        text-wrap: balance;
       }
 
       .rbb-detail-card .rbb-card-title {
+        margin: 0 0 8px !important;
         font-size: 26px !important;
+        font-weight: 950 !important;
         line-height: 1.12 !important;
+        letter-spacing: -.02em;
       }
 
       .rbb-card-title a {
@@ -2054,19 +2176,34 @@
       .rbb-chip-atmos { color: #fff0d7; background: rgba(143, 93, 44, .66); border-color: rgba(245, 191, 88, .22); }
       .rbb-chip-default { color: #dce8f4; background: rgba(255,255,255,.08); }
 
-      .rbb-badges { margin-bottom: 10px; }
+      .rbb-badges { margin-bottom: 8px; gap: 4px; }
+      .rbb-badges .rbb-chip { font-size: 9px; padding: 2px 6px; min-height: 16px; }
 
       .rbb-description {
+        color: #c3d1dc;
+        font-size: 11px;
+        line-height: 1.45;
+        margin: 6px 0 8px;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .rbb-detail-card .rbb-description {
         color: #dce7f2;
         font-size: 12px;
-        line-height: 1.45;
         margin: 8px 0 10px;
+        display: block;
+        -webkit-line-clamp: initial;
+        overflow: visible;
+        max-width: 65ch;
       }
 
       .rbb-release-list {
-        margin-top: 10px;
+        margin-top: 8px;
         display: grid;
-        gap: 8px;
+        gap: 6px;
       }
 
       .rbb-release-heading {
@@ -2091,13 +2228,20 @@
 
       .rbb-release-row {
         display: grid;
-        grid-template-columns: 116px minmax(0, 1fr) auto;
-        gap: 12px;
+        grid-template-columns: 72px minmax(0, 1fr) auto;
+        gap: 8px;
         align-items: center;
-        padding: 12px;
-        border-radius: 16px;
+        padding: 8px;
+        border-radius: 12px;
         background: rgba(0,0,0,.18);
         border: 1px solid rgba(255,255,255,.07);
+      }
+
+      .rbb-detail-card .rbb-release-row {
+        grid-template-columns: 116px minmax(0, 1fr) auto;
+        gap: 12px;
+        padding: 12px;
+        border-radius: 16px;
       }
 
       .rbb-best-row {
@@ -2107,19 +2251,27 @@
 
       .rbb-quality-block {
         display: grid;
-        gap: 7px;
+        gap: 4px;
       }
+
+      .rbb-detail-card .rbb-quality-block { gap: 7px; }
 
       .rbb-quality-label {
         width: fit-content;
-        min-width: 68px;
+        min-width: 52px;
         text-align: center;
         border-radius: 999px;
-        padding: 8px 12px;
-        font-size: 15px;
+        padding: 5px 8px;
+        font-size: 11px;
         font-weight: 1000;
         color: #101820;
         background: linear-gradient(135deg, #dbe9f6, #ffffff);
+      }
+
+      .rbb-detail-card .rbb-quality-label {
+        min-width: 68px;
+        padding: 8px 12px;
+        font-size: 15px;
       }
 
       .rbb-quality-4k {
@@ -2144,24 +2296,42 @@
 
       .rbb-size-badge {
         width: fit-content;
-        min-width: 68px;
+        min-width: 52px;
         text-align: center;
-        border-radius: 10px;
-        padding: 7px 10px;
+        border-radius: 8px;
+        padding: 5px 7px;
         color: #f7dca3;
         background: rgba(214,166,76,.12);
         border: 1px solid rgba(214,166,76,.24);
-        font-size: 15px;
+        font-size: 11px;
         font-weight: 1000;
         white-space: nowrap;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .rbb-detail-card .rbb-size-badge {
+        min-width: 68px;
+        padding: 7px 10px;
+        font-size: 15px;
       }
 
       .rbb-release-name {
         color: #edf4fb;
         font-weight: 850;
-        font-size: 13px;
+        font-size: 11px;
         line-height: 1.35;
         word-break: break-word;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+      }
+
+      .rbb-detail-card .rbb-release-name {
+        font-size: 13px;
+        display: block;
+        -webkit-line-clamp: initial;
       }
 
       .rbb-release-meta {
@@ -2174,8 +2344,11 @@
       }
 
       .rbb-release-badges {
-        margin-top: 7px;
+        margin-top: 5px;
       }
+
+      .rbb-release-row .rbb-release-badges .rbb-chip { font-size: 9px; padding: 2px 6px; min-height: 15px; }
+      .rbb-detail-card .rbb-release-row .rbb-release-badges .rbb-chip { font-size: 10px; padding: 3px 8px; min-height: 20px; }
 
       .rbb-release-actions {
         display: flex;
@@ -2195,14 +2368,22 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-height: 34px;
-        border-radius: 11px;
-        padding: 7px 12px;
+        min-height: 26px;
+        border-radius: 9px;
+        padding: 5px 9px;
         color: #f6ead4 !important;
         background: linear-gradient(135deg, #6b4a1f, #a5752e);
         border: 1px solid rgba(245,191,88,.30);
         font-weight: 950;
         text-decoration: none !important;
+        font-size: 10px;
+        box-shadow: 0 6px 16px rgba(0,0,0,.18);
+      }
+
+      .rbb-detail-card .rbb-rg-action {
+        min-height: 34px;
+        border-radius: 11px;
+        padding: 7px 12px;
         font-size: 12px;
         box-shadow: 0 10px 24px rgba(0,0,0,.18);
       }
@@ -2374,6 +2555,55 @@
       }
 
       .screen-reader-text { display: none !important; }
+
+      .rbb-lightbox-overlay {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 500;
+        background: rgba(4,8,12,.72);
+        backdrop-filter: blur(6px);
+        padding: 5vh 16px;
+        overflow-y: auto;
+      }
+
+      .rbb-lightbox-overlay.open { display: block; }
+
+      .rbb-lightbox-panel {
+        width: min(760px, 100%);
+        margin: 0 auto;
+        position: relative;
+        animation: rbb-lightbox-in .16s ease;
+      }
+
+      @keyframes rbb-lightbox-in {
+        from { opacity: 0; transform: translateY(10px) scale(.98); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .rbb-lightbox-panel { animation: none; }
+      }
+
+      .rbb-lightbox-close {
+        position: absolute;
+        top: -14px;
+        right: -14px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: 1px solid var(--rbb-border);
+        background: #101a24;
+        color: var(--rbb-text);
+        font-size: 15px;
+        cursor: pointer;
+        box-shadow: var(--rbb-shadow);
+        z-index: 2;
+      }
+
+      .rbb-lightbox-close:hover { background: #172432; }
+
+      .rbb-lightbox-panel .rbb-card { margin: 0; }
 
       @media (max-width: 980px) {
         #rbb-clean { width: calc(100vw - 20px); }
