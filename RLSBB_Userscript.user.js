@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.5.0
-// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
+// @version      1.6.0
+// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
 // @match        https://www.rlsbb.in/*
@@ -10,6 +10,8 @@
 // @match        https://search.rlsbb.in/*
 // @match        https://rapidgator.net/file/*
 // @match        https://www.rapidgator.net/file/*
+// @match        http://protected.to/*
+// @match        https://protected.to/*
 // @connect      rlsbb.in
 // @connect      www.rlsbb.in
 // @connect      post.rlsbb.in
@@ -21,6 +23,7 @@
 // @grant        GM_getValue
 // @grant        GM_download
 // @grant        GM_info
+// @grant        GM_setClipboard
 // @run-at       document-end
 // @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
 // @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
@@ -272,6 +275,72 @@
   function guessExtension(filename) {
     const match = /\.[a-z0-9]{2,4}$/i.exec(filename || '');
     return match ? match[0] : '';
+  }
+
+  // ---- protected.to multi-part splitter page ("Ncrypt Application") ----
+  // Some protected.to releases (usually multi-part RARs) land you on a page listing every
+  // real rapidgator.net link directly instead of one link to click through. AllDebrid can't
+  // batch-unlock+extract these from the browser (that needs real filesystem/7z access), but
+  // the user's existing NAS pipeline (rlsbb-watcher.py --queue-direct-url, wired into the tray
+  // app's new Manual Import button) already does exactly that. This just detects the page and
+  // copies a ready-to-paste block (title + every link) to the clipboard for it.
+  function initProtectedToPage() {
+    const heading = document.querySelector('.Encrypted-folder');
+    const linkNodes = [...document.querySelectorAll('.Encrypted-box .links a[href]')];
+    if (!heading || !linkNodes.length) return; // not a multi-link splitter page — leave alone
+
+    const headingText = cleanText(heading.textContent);
+    const sizeMatch = headingText.match(/\[\s*([^\]]+?)\s*\]\s*$/);
+    const releaseName = cleanText(headingText.replace(/\[[^\]]*\]\s*$/, ''));
+    const size = sizeMatch ? sizeMatch[1] : '';
+    const links = linkNodes.map(a => a.href);
+
+    // same cross-page memory used for the RapidGator page's smart rename, in case the user
+    // clicks straight into a part instead of using the tray
+    rememberPendingReleaseName(releaseName);
+
+    injectStyles();
+
+    const panel = document.createElement('div');
+    panel.id = 'rbb-protected-panel';
+    panel.className = 'rbb-card rbb-detail-card rbb-rg-page-panel';
+    panel.innerHTML = `
+      <div class="rbb-content">
+        <h2 class="rbb-card-title">RLSBB Clean Board</h2>
+        <p class="rbb-description" style="max-width:none;">
+          This release is split into <strong>${links.length}</strong> part${links.length === 1 ? '' : 's'}:
+          <strong>${esc(releaseName)}</strong>${size ? ` &middot; ${esc(size)}` : ''}
+        </p>
+        <p class="rbb-description" style="max-width:none;">
+          AllDebrid can unlock each part, but auto-extracting a multi-part RAR needs real filesystem
+          access a browser doesn't have — your NAS pipeline already does this via the tray app's
+          <strong>Manual Import</strong> (paste icon next to Settings). Copy below, then paste there.
+        </p>
+        <div class="rbb-settings-actions" style="justify-content:flex-start; gap:10px; margin-top:6px;">
+          <button type="button" class="rbb-dl-btn rbb-dl-aria2" id="rbb-protected-copy" style="width:auto; flex-direction:row; padding:8px 14px;">
+            <span class="rbb-dl-icon" aria-hidden="true">&#128203;</span><span class="rbb-dl-label">Copy for tray Manual Import</span>
+          </button>
+        </div>
+        <span class="rbb-dl-status" id="rbb-protected-status" style="display:block; text-align:left; margin-top:8px;"></span>
+      </div>
+    `;
+
+    const anchor = document.querySelector('.Encrypted-box')?.closest('.panel') || document.body.firstElementChild;
+    anchor.parentNode.insertBefore(panel, anchor);
+
+    document.getElementById('rbb-protected-copy').addEventListener('click', () => {
+      const status = document.getElementById('rbb-protected-status');
+      const clipboardText = [releaseName, ...links].join('\n');
+
+      if (typeof GM_setClipboard === 'function') {
+        GM_setClipboard(clipboardText);
+        status.textContent = 'Copied ✓ — paste into the tray\'s Manual Import';
+        status.classList.remove('rbb-dl-error');
+      } else {
+        status.textContent = 'Clipboard unavailable — copy the links manually';
+        status.classList.add('rbb-dl-error');
+      }
+    });
   }
 
   function makeShell() {
@@ -3436,7 +3505,8 @@
   }
 
   const onRapidGator = /(^|\.)rapidgator\.net$/i.test(location.hostname);
-  const boot = onRapidGator ? initRapidGatorPage : init;
+  const onProtectedTo = /(^|\.)protected\.to$/i.test(location.hostname);
+  const boot = onRapidGator ? initRapidGatorPage : (onProtectedTo ? initProtectedToPage : init);
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', boot);
