@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.1.0
+// @version      2.1.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -2158,12 +2158,21 @@
       // substantial parts that only work TOGETHER, e.g. fg-01.bin/fg-02.bin/fg-03.bin + setup.exe)
       // needs every required part, or the download is useless on its own — this is exactly what
       // went wrong the first time this shipped: "largest file only" silently dropped the other
-      // 33GB+ of required parts for a FitGirl repack. Multi-part is detected by counting files
-      // that are substantial in their own right (>=100MB) — junk like .nfo/.txt/.md5 never
-      // crosses that bar, so a real movie release still resolves to single-file mode even with
-      // a handful of small extras alongside the one video file.
-      const SIGNIFICANT_BYTES = 100 * 1024 * 1024;
-      const significant = files.filter(f => Number(f.size || 0) >= SIGNIFICANT_BYTES);
+      // 33GB+ of required parts for a FitGirl repack.
+      //
+      // Multi-part is detected by counting files that are "substantial" relative to the release,
+      // not against one flat byte count. A flat >=100MB floor looked right for the first repack
+      // tested, but broke on a real one where fg-02.bin/fg-03.bin (92.5MB/47MB) sat just under
+      // that line — only fg-01.bin got counted, isMultiPart came out false, and the other two
+      // required parts got silently dropped exactly like the original bug this was meant to fix.
+      // The floor now scales with the largest file in the torrent (2%, floored at 20MB so tiny
+      // junk like .nfo/.txt/.md5 still never counts) — a 1.4GB main part makes anything down to
+      // ~29MB count as a real part, while a lone 8GB movie still only has its ~40MB sample fall
+      // well short of the ~160MB floor that implies, so it correctly stays single-file.
+      const JUNK_FLOOR_BYTES = 20 * 1024 * 1024;
+      const largestBytes = files.reduce((max, f) => Math.max(max, Number(f.size || 0)), 0);
+      const significantFloor = Math.max(JUNK_FLOOR_BYTES, largestBytes * 0.02);
+      const significant = files.filter(f => Number(f.size || 0) >= significantFloor);
       const isMultiPart = significant.length > 1;
 
       let toDownload;
