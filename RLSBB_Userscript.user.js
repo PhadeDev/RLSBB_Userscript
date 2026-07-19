@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RLSBB Clean Board v11 - Banner Release Picker
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.2.0
-// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, fixed right recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
+// @version      1.2.1
+// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
 // @match        https://www.rlsbb.in/*
@@ -14,6 +14,8 @@
 // @connect      search.rlsbb.in
 // @grant        GM_xmlhttpRequest
 // @run-at       document-end
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
 // ==/UserScript==
 
 (function () {
@@ -21,6 +23,9 @@
 
   const STORAGE_KEY = 'rbbCleanBoard.v11';
   const isPostPage = location.hostname.startsWith('post.') || document.body.classList.contains('single-post');
+  const isSearchPage = location.hostname.startsWith('search.');
+  // Recommended posters only make sense on the true homepage/archive browse view
+  const showRecommended = !isPostPage && !isSearchPage;
   const seenIds = new Set();
 
   let nextPageUrl = '';
@@ -81,7 +86,7 @@
       return;
     }
 
-    const recommendedItems = extractRecommendedItems(document);
+    const recommendedItems = showRecommended ? extractRecommendedItems(document) : [];
 
     injectStyles();
     if (!isPostPage) injectLightbox();
@@ -101,7 +106,7 @@
 
     mountSearch(app, originalSearch);
     mountCategories(app, categoryWidget);
-    mountRecommended(app, recommendedItems);
+    if (showRecommended) mountRecommended(app, recommendedItems);
 
     const grid = app.querySelector('[data-grid]');
     articles.forEach(article => appendArticle(article, grid));
@@ -110,9 +115,13 @@
     applyFiltersAndSort();
 
     hideOriginalPageSafely();
-    refreshRecommendedRail();
+
+    if (showRecommended) {
+      refreshRecommendedRail();
+      watchRecommendedRail();
+    }
+
     hidePosterWallsSafely();
-    watchRecommendedRail();
 
     if (isPostPage) {
       autoExpandPostPageSections();
@@ -169,9 +178,9 @@
         </nav>
       `}
 
-      <div class="rbb-layout">
+      <div class="rbb-layout ${showRecommended ? '' : 'rbb-layout-full'}">
         <main class="rbb-grid" data-grid></main>
-        <aside class="rbb-side" data-side></aside>
+        ${showRecommended ? '<aside class="rbb-side" data-side></aside>' : ''}
       </div>
 
       <div class="rbb-loader" data-loader hidden>Loading more…</div>
@@ -1374,36 +1383,35 @@
   }
 
   function injectLightbox() {
-    if (document.getElementById('rbb-lightbox-overlay')) return;
+    if (document.getElementById('rbb-lightbox-dialog')) return;
 
-    const overlay = document.createElement('div');
-    overlay.id = 'rbb-lightbox-overlay';
-    overlay.className = 'rbb-lightbox-overlay';
-    overlay.innerHTML = `
-      <div class="rbb-lightbox-panel">
-        <button type="button" class="rbb-lightbox-close" aria-label="Close">&times;</button>
-        <div class="rbb-lightbox-body"></div>
-      </div>
+    // a native <dialog> renders in the browser's top layer, so it can't be broken by an
+    // ancestor's `transform`/`filter`/`contain` (a common WP-theme trick that silently turns
+    // `position: fixed` into "fixed relative to that ancestor" instead of the viewport)
+    const dialog = document.createElement('dialog');
+    dialog.id = 'rbb-lightbox-dialog';
+    dialog.className = 'rbb-lightbox-dialog';
+    dialog.innerHTML = `
+      <button type="button" class="rbb-lightbox-close" aria-label="Close">&times;</button>
+      <div class="rbb-lightbox-body"></div>
     `;
 
-    document.body.appendChild(overlay);
+    document.body.appendChild(dialog);
 
-    overlay.addEventListener('click', event => {
-      if (event.target === overlay) closeLightbox();
+    dialog.addEventListener('click', event => {
+      if (event.target === dialog) closeLightbox();
     });
 
-    overlay.querySelector('.rbb-lightbox-close').addEventListener('click', closeLightbox);
-
-    document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && overlay.classList.contains('open')) closeLightbox();
-    });
+    dialog.querySelector('.rbb-lightbox-close').addEventListener('click', closeLightbox);
+    dialog.addEventListener('cancel', () => { document.body.style.overflow = ''; });
+    dialog.addEventListener('close', () => { document.body.style.overflow = ''; });
   }
 
   function openLightbox(sourceCard, data) {
-    const overlay = document.getElementById('rbb-lightbox-overlay');
-    if (!overlay) return;
+    const dialog = document.getElementById('rbb-lightbox-dialog');
+    if (!dialog) return;
 
-    const body = overlay.querySelector('.rbb-lightbox-body');
+    const body = dialog.querySelector('.rbb-lightbox-body');
     const clone = sourceCard.cloneNode(true);
     clone.classList.add('rbb-detail-card');
 
@@ -1414,8 +1422,8 @@
 
     body.innerHTML = '';
     body.appendChild(clone);
-    overlay.scrollTop = 0;
-    overlay.classList.add('open');
+    dialog.scrollTop = 0;
+    if (!dialog.open) dialog.showModal();
     document.body.style.overflow = 'hidden';
 
     // cloning drops listeners, so kick off the comment fetch directly rather than
@@ -1425,10 +1433,10 @@
   }
 
   function closeLightbox() {
-    const overlay = document.getElementById('rbb-lightbox-overlay');
-    if (!overlay) return;
+    const dialog = document.getElementById('rbb-lightbox-dialog');
+    if (!dialog || !dialog.open) return;
 
-    overlay.classList.remove('open');
+    dialog.close();
     document.body.style.overflow = '';
   }
 
@@ -1920,6 +1928,11 @@
         align-items: start;
       }
 
+      /* post pages and search results don't show the recommended rail (homepage only) */
+      .rbb-layout-full {
+        grid-template-columns: minmax(0, 1fr) !important;
+      }
+
       .rbb-grid {
         grid-column: 1 !important;
         grid-row: 1 !important;
@@ -2046,7 +2059,8 @@
       .rbb-image img {
         width: 100%;
         height: 100%;
-        object-fit: contain;
+        object-fit: cover;
+        object-position: center top;
         display: block;
         transition: transform .22s ease, opacity .22s ease;
         background: #071019;
@@ -2556,23 +2570,32 @@
 
       .screen-reader-text { display: none !important; }
 
-      .rbb-lightbox-overlay {
-        display: none;
+      .rbb-lightbox-dialog {
         position: fixed;
         inset: 0;
-        z-index: 500;
-        background: rgba(4,8,12,.72);
-        backdrop-filter: blur(6px);
-        padding: 5vh 16px;
+        margin: auto;
+        width: min(760px, calc(100vw - 32px));
+        max-width: none;
+        max-height: 90vh;
+        padding: 0;
+        border: 0;
+        border-radius: 20px;
         overflow-y: auto;
+        background: transparent;
+        color: var(--rbb-text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
       }
 
-      .rbb-lightbox-overlay.open { display: block; }
+      /* the dialog itself carries no background so its rounded corners show through;
+         .rbb-detail-card (the cloned post card) supplies the actual panel look */
+      .rbb-lightbox-dialog .rbb-card { margin: 0; }
 
-      .rbb-lightbox-panel {
-        width: min(760px, 100%);
-        margin: 0 auto;
-        position: relative;
+      .rbb-lightbox-dialog::backdrop {
+        background: rgba(4,8,12,.72);
+        backdrop-filter: blur(6px);
+      }
+
+      .rbb-lightbox-dialog[open] {
         animation: rbb-lightbox-in .16s ease;
       }
 
@@ -2582,28 +2605,26 @@
       }
 
       @media (prefers-reduced-motion: reduce) {
-        .rbb-lightbox-panel { animation: none; }
+        .rbb-lightbox-dialog[open] { animation: none; }
       }
 
       .rbb-lightbox-close {
         position: absolute;
-        top: -14px;
-        right: -14px;
-        width: 34px;
-        height: 34px;
+        top: 10px;
+        right: 10px;
+        width: 32px;
+        height: 32px;
         border-radius: 50%;
-        border: 1px solid var(--rbb-border);
-        background: #101a24;
+        border: 1px solid rgba(255,255,255,.18);
+        background: rgba(10,16,22,.82);
         color: var(--rbb-text);
         font-size: 15px;
         cursor: pointer;
         box-shadow: var(--rbb-shadow);
-        z-index: 2;
+        z-index: 5;
       }
 
       .rbb-lightbox-close:hover { background: #172432; }
-
-      .rbb-lightbox-panel .rbb-card { margin: 0; }
 
       @media (max-width: 980px) {
         #rbb-clean { width: calc(100vw - 20px); }
