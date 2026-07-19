@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         RLSBB Clean Board v11 - Banner Release Picker
+// @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.3.2
-// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
+// @version      1.4.0
+// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
 // @match        https://www.rlsbb.in/*
@@ -40,6 +40,7 @@
   function defaultState() {
     return {
       q: '',
+      categoryFilter: '',
       sort: 'newest',
       hideSupport: true,
       hideApps: true,
@@ -117,6 +118,7 @@
     if (!isPostPage) injectLightbox();
     injectSettingsDialog();
     bindDownloadButtons();
+    bindCategoryPills();
     document.body.classList.add('rbb-clean-body', isPostPage ? 'rbb-post-mode' : 'rbb-feed-mode');
 
     nextPageUrl = findNextPageUrl(document);
@@ -380,7 +382,7 @@
 
         <div class="rbb-top-meta">
           <div class="rbb-cats">
-            ${data.categories.slice(0, 3).map(c => `<span>${esc(c)}</span>`).join('')}
+            ${data.categories.slice(0, 3).map(c => `<button type="button" class="rbb-cat-pill" data-category="${escAttr(c.toLowerCase())}" title="Filter to ${escAttr(c)}">${esc(c)}</button>`).join('')}
           </div>
           <div class="rbb-date-line">
             <strong>${data.postedAbsolute ? esc(data.postedAbsolute) : 'Date unknown'}</strong>
@@ -1268,6 +1270,7 @@
 
       if (!isPostPage) {
         if (q && !text.includes(q)) hideCard = true;
+        if (state.categoryFilter && !cats.includes(state.categoryFilter)) hideCard = true;
         if (state.hideSupport && /support us|supportus/.test(text)) hideCard = true;
         if (state.hideApps && /applications|macos|windows/.test(cats + ' ' + text)) hideCard = true;
         if (state.hideTv && /tv shows|foreign tv|tv packs/.test(cats)) hideCard = true;
@@ -1572,6 +1575,25 @@
       event.preventDefault();
       event.stopPropagation();
       handleDownloadButtonClick(button);
+    });
+  }
+
+  // Category pills (TV Shows / Games / Movies / ...) filter the grid down to that category.
+  // Works whether clicked on a normal grid card or on the cloned card inside the lightbox.
+  function bindCategoryPills() {
+    document.addEventListener('click', event => {
+      const pill = event.target.closest('.rbb-cat-pill');
+      if (!pill) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      const category = pill.dataset.category || '';
+      state.categoryFilter = state.categoryFilter === category ? '' : category;
+      saveState();
+      applyFiltersAndSort();
+
+      if (pill.closest('#rbb-lightbox-dialog')) closeLightbox();
     });
   }
 
@@ -2401,7 +2423,7 @@
         gap: 5px;
       }
 
-      .rbb-cats span,
+      .rbb-cat-pill,
       .rbb-relative {
         display: inline-flex;
         align-items: center;
@@ -2413,10 +2435,24 @@
         line-height: 1;
       }
 
-      .rbb-cats span {
+      .rbb-cat-pill {
+        all: unset;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        min-height: 20px;
+        border-radius: 999px;
+        padding: 3px 7px;
+        font-size: 10px;
+        font-weight: 800;
+        font-family: inherit;
+        line-height: 1;
         color: #c8d5df;
         background: rgba(255,255,255,.058);
+        cursor: pointer;
       }
+
+      .rbb-cat-pill:hover { color: #fff; background: rgba(103,183,255,.28); }
 
       .rbb-date-line {
         display: flex;
@@ -2526,7 +2562,7 @@
       }
 
       .rbb-detail-card .rbb-release-row {
-        grid-template-columns: 116px minmax(0, 1fr) 108px;
+        grid-template-columns: 116px minmax(0, 1fr) 128px;
         gap: 12px;
         padding: 12px;
         border-radius: 16px;
@@ -2691,6 +2727,8 @@
       .rbb-settings-btn:hover { filter: brightness(1.15); }
 
       .rbb-dl-btn {
+        all: unset;
+        box-sizing: border-box;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -2702,6 +2740,7 @@
         border-radius: 8px;
         border: 1px solid rgba(255,255,255,.14);
         font-weight: 850;
+        font-family: inherit;
         cursor: pointer;
         line-height: 1.15;
         white-space: normal;
@@ -2711,9 +2750,9 @@
       .rbb-dl-icon { font-size: 12px; }
       .rbb-dl-label { font-size: 9px; }
 
-      .rbb-detail-card .rbb-dl-btn { flex-direction: row; min-height: 32px; padding: 7px 10px; gap: 6px; }
-      .rbb-detail-card .rbb-dl-icon { font-size: 14px; }
-      .rbb-detail-card .rbb-dl-label { font-size: 12px; }
+      .rbb-detail-card .rbb-dl-btn { flex-direction: row; min-height: 32px; padding: 6px 8px; gap: 5px; }
+      .rbb-detail-card .rbb-dl-icon { font-size: 13px; }
+      .rbb-detail-card .rbb-dl-label { font-size: 11px; white-space: nowrap; }
 
       .rbb-dl-browser { background: rgba(77,157,130,.28); color: #b6f2dc; }
       .rbb-dl-browser:hover { background: rgba(77,157,130,.42); }
@@ -2985,22 +3024,30 @@
       }
 
       .rbb-lightbox-close {
+        all: unset;
+        box-sizing: border-box;
         position: absolute;
         top: 10px;
         right: 10px;
-        width: 32px;
-        height: 32px;
+        width: 30px;
+        height: 30px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         border-radius: 50%;
-        border: 1px solid rgba(255,255,255,.18);
-        background: rgba(10,16,22,.82);
+        border: 1px solid rgba(255,255,255,.22);
+        background: rgba(10,16,22,.88);
         color: var(--rbb-text);
-        font-size: 15px;
+        font-size: 16px;
+        font-family: inherit;
+        line-height: 1;
         cursor: pointer;
-        box-shadow: var(--rbb-shadow);
+        box-shadow: 0 6px 18px rgba(0,0,0,.35);
         z-index: 5;
       }
 
-      .rbb-lightbox-close:hover { background: #172432; }
+      .rbb-lightbox-close:hover { background: #223142; border-color: rgba(255,255,255,.34); }
+      .rbb-lightbox-close:focus-visible { outline: 2px solid var(--rbb-blue); outline-offset: 2px; }
 
       @media (max-width: 980px) {
         #rbb-clean { width: calc(100vw - 20px); }
