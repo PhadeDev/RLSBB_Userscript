@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.0.2
+// @version      2.0.3
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -1981,6 +1981,8 @@
       .rbb-magnet-btn.rbb-magnet-browser:hover { background: #37a683 !important; }
       .rbb-magnet-btn.rbb-magnet-local { background: #2b6fa4 !important; color: #fff !important; }
       .rbb-magnet-btn.rbb-magnet-local:hover { background: #3a86c4 !important; }
+      .rbb-magnet-btn.rbb-magnet-settings { background: #555 !important; color: #fff !important; padding: 2px 6px !important; }
+      .rbb-magnet-btn.rbb-magnet-settings:hover { background: #6b6b6b !important; }
       .rbb-magnet-btn:disabled { opacity: .55 !important; cursor: default !important; }
       .rbb-magnet-status { all: initial !important; font: 11px/1.3 -apple-system, Segoe UI, Roboto, Arial, sans-serif !important; color: #444 !important; margin-left: 6px !important; }
     `;
@@ -1998,6 +2000,7 @@
       group.innerHTML = `
         <button type="button" class="rbb-magnet-btn rbb-magnet-browser" title="Cache via AllDebrid, then download in your browser">⬇ AllDebrid</button>
         <button type="button" class="rbb-magnet-btn rbb-magnet-local" title="Cache via AllDebrid, then send to local aria2 (choose folder)">➟ aria2</button>
+        <button type="button" class="rbb-magnet-btn rbb-magnet-settings" title="Download settings (AllDebrid key, aria2 RPC/secret)">⚙</button>
         <span class="rbb-magnet-status" data-magnet-status></span>
       `;
 
@@ -2005,6 +2008,11 @@
 
       const suggestedName = cleanText(link.textContent) || (link.href.match(/dn=([^&]+)/) || [])[1] || 'download';
 
+      group.querySelector('.rbb-magnet-settings').addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        openSettingsDialog();
+      });
       group.querySelector('.rbb-magnet-browser').addEventListener('click', event => {
         event.preventDefault();
         event.stopPropagation();
