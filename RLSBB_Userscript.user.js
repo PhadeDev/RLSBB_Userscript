@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.4.3
+// @version      1.4.4
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -1511,7 +1511,9 @@
 
     if (json.status !== 'success') {
       logError('AllDebrid unlock failed:', json.error);
-      throw new Error((json.error && json.error.message) || 'AllDebrid could not unlock this link.');
+      const error = new Error((json.error && json.error.message) || 'AllDebrid could not unlock this link.');
+      error.code = json.error && json.error.code;
+      throw error;
     }
 
     return { ...json.data, elapsedMs }; // { link, filename, filesize, ..., elapsedMs }
@@ -1594,6 +1596,24 @@
     return json.result; // gid
   }
 
+  // Replaces a release row's action buttons with an unmissable "gone" banner instead of a
+  // small line of red status text that's easy to overlook or mistake for a transient error.
+  function markReleaseRowDead(button) {
+    const row = button.closest('.rbb-release-row');
+    if (!row) return;
+
+    row.classList.add('rbb-release-dead');
+
+    const actions = row.querySelector('.rbb-release-actions');
+    if (actions) {
+      actions.innerHTML = `
+        <div class="rbb-dead-banner" title="AllDebrid confirmed this file no longer exists on the file hoster (error code LINK_DOWN)">
+          &#10060; File removed<br>from host
+        </div>
+      `;
+    }
+  }
+
   async function handleDownloadButtonClick(button) {
     const rgUrl = button.dataset.rgUrl;
     const releaseName = button.dataset.rgName || 'download';
@@ -1634,6 +1654,15 @@
     } catch (error) {
       clearTimeout(slowNotice);
       logError('Download button failed:', error);
+
+      // LINK_DOWN means AllDebrid confirmed the file no longer exists on the hoster at all —
+      // that's permanent, not a transient error, so replace the buttons with an unmissable
+      // banner instead of a small line of red text easy to overlook.
+      if (error.code === 'LINK_DOWN') {
+        markReleaseRowDead(button);
+        return;
+      }
+
       if (status) {
         const message = error.message || 'Failed';
         status.textContent = message.length > 22 ? message.slice(0, 21) + '…' : message;
@@ -2862,6 +2891,30 @@
       .rbb-dl-protected:hover { background: rgba(214,166,76,.38); }
 
       .rbb-dl-btn:disabled { opacity: .55; cursor: default; }
+
+      .rbb-release-dead { opacity: .62; }
+      .rbb-release-dead .rbb-release-name { text-decoration: line-through; }
+      .rbb-release-dead .rbb-quality-block { filter: grayscale(1); }
+
+      .rbb-dead-banner {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        width: 100%;
+        min-height: 34px;
+        padding: 6px 4px;
+        border-radius: 8px;
+        background: rgba(220,60,60,.22);
+        border: 1px solid rgba(255,120,120,.45);
+        color: #ffb8b8;
+        font-size: 9px;
+        font-weight: 900;
+        line-height: 1.25;
+        cursor: help;
+      }
+
+      .rbb-detail-card .rbb-dead-banner { font-size: 11px; min-height: 32px; padding: 8px; }
 
       .rbb-dl-busy {
         animation: rbb-dl-pulse 1s ease-in-out infinite;
