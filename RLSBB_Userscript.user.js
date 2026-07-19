@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.4.5
-// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
+// @version      1.5.0
+// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
 // @match        https://www.rlsbb.in/*
 // @match        https://post.rlsbb.in/*
 // @match        https://search.rlsbb.in/*
+// @match        https://rapidgator.net/file/*
+// @match        https://www.rapidgator.net/file/*
 // @connect      rlsbb.in
 // @connect      www.rlsbb.in
 // @connect      post.rlsbb.in
@@ -169,6 +171,107 @@
     }
 
     if (!isPostPage) setupInfiniteScroll(grid);
+  }
+
+  // ---- RapidGator file-page companion: adds its own Download/To NAS buttons directly on the
+  // page you land on after clicking through a protected.to link, since RapidGator's own free-
+  // download flow has no automatable button at all. Pre-fills a rename box with whichever
+  // release name was most recently clicked from RLSBB (see rememberPendingReleaseName()),
+  // since RapidGator's own filename is frequently a cryptic abbreviation. ----
+  function initRapidGatorPage() {
+    const fileLink = document.querySelector('.file-descr a');
+    if (!fileLink) return; // not an actual file page (login/premium/etc.) — leave it alone
+
+    injectStyles();
+    injectSettingsDialog();
+
+    const rawFilename = cleanText(fileLink.textContent) || document.title.replace(/^Download file\s*/i, '') || 'download';
+    const sizeMatch = document.body.textContent.match(/File size:\s*([\d.,]+\s*[KMGT]?B)/i);
+    const fileSize = sizeMatch ? sizeMatch[1] : '';
+
+    const recent = getRecentReleaseNames();
+    const suggestedName = recent[0]?.name || '';
+
+    const panel = document.createElement('div');
+    panel.id = 'rbb-rg-panel';
+    panel.className = 'rbb-card rbb-detail-card rbb-rg-page-panel';
+    panel.innerHTML = `
+      <div class="rbb-content">
+        <h2 class="rbb-card-title">RLSBB Clean Board</h2>
+        <p class="rbb-description" style="max-width:none;">
+          Detected file: <strong>${esc(rawFilename)}</strong>${fileSize ? ` &middot; ${esc(fileSize)}` : ''}
+        </p>
+        ${suggestedName ? `<p class="rbb-description" style="max-width:none; color:#9ef0c8;">Guessed from a recent RLSBB click: <strong>${esc(suggestedName)}</strong></p>` : ''}
+        <label class="rbb-settings-field">
+          <span>Save as</span>
+          <input type="text" id="rbb-rg-filename" value="${escAttr(suggestedName || rawFilename)}">
+        </label>
+        <div class="rbb-settings-actions" style="justify-content:flex-start; gap:10px; margin-top:10px;">
+          <button type="button" class="rbb-dl-btn rbb-dl-browser" id="rbb-rg-download" style="width:auto; flex-direction:row; padding:8px 14px;">
+            <span class="rbb-dl-icon" aria-hidden="true">&#8595;</span><span class="rbb-dl-label">Download</span>
+          </button>
+          <button type="button" class="rbb-dl-btn rbb-dl-aria2" id="rbb-rg-tonas" style="width:auto; flex-direction:row; padding:8px 14px;">
+            <span class="rbb-dl-icon" aria-hidden="true">&#8677;</span><span class="rbb-dl-label">To NAS</span>
+          </button>
+          <button type="button" class="rbb-settings-btn" id="rbb-rg-settings" title="Download settings (AllDebrid + aria2)" style="height:auto; padding:6px 10px; font-size:14px;">&#9881;</button>
+        </div>
+        <span class="rbb-dl-status" id="rbb-rg-status" style="display:block; text-align:left; margin-top:8px;"></span>
+      </div>
+    `;
+
+    const anchor = document.querySelector('.file-descr') || document.body.firstElementChild;
+    anchor.parentNode.insertBefore(panel, anchor);
+
+    document.getElementById('rbb-rg-download').addEventListener('click', () => runRapidGatorDownload('browser'));
+    document.getElementById('rbb-rg-tonas').addEventListener('click', () => runRapidGatorDownload('aria2'));
+    document.getElementById('rbb-rg-settings').addEventListener('click', openSettingsDialog);
+  }
+
+  async function runRapidGatorDownload(mode) {
+    const input = document.getElementById('rbb-rg-filename');
+    const button = document.getElementById(mode === 'aria2' ? 'rbb-rg-tonas' : 'rbb-rg-download');
+    const status = document.getElementById('rbb-rg-status');
+    const chosenName = (input.value || '').trim() || 'download';
+
+    button.disabled = true;
+    button.classList.add('rbb-dl-busy');
+    status.textContent = 'Unlocking…';
+    status.classList.remove('rbb-dl-error');
+
+    const slowNotice = setTimeout(() => { status.textContent = 'Still unlocking…'; }, 8000);
+
+    try {
+      const unlocked = await allDebridUnlock(location.href);
+      clearTimeout(slowNotice);
+
+      // preserve the real file extension even if the user's chosen name doesn't include one
+      const finalName = /\.[a-z0-9]{2,4}$/i.test(chosenName)
+        ? chosenName
+        : chosenName + guessExtension(unlocked.filename);
+
+      const seconds = (unlocked.elapsedMs / 1000).toFixed(1);
+
+      if (mode === 'browser') {
+        await browserDownload(unlocked.link, finalName);
+        status.textContent = `Started ✓ ${seconds}s`;
+      } else {
+        await aria2AddUri(unlocked.link, finalName);
+        status.textContent = `Sent ✓ ${seconds}s`;
+      }
+    } catch (error) {
+      clearTimeout(slowNotice);
+      logError('RapidGator page download failed:', error);
+      status.textContent = error.code === 'LINK_DOWN' ? '❌ File removed from host' : (error.message || 'Failed');
+      status.classList.add('rbb-dl-error');
+    } finally {
+      button.disabled = false;
+      button.classList.remove('rbb-dl-busy');
+    }
+  }
+
+  function guessExtension(filename) {
+    const match = /\.[a-z0-9]{2,4}$/i.exec(filename || '');
+    return match ? match[0] : '';
   }
 
   function makeShell() {
@@ -490,7 +593,7 @@
       // protected.to is a manual click-through page (ads/captcha) — AllDebrid can't unlock it,
       // so this just opens it in a new tab instead of pretending it can be automated.
       downloadButtons = `
-        <a class="rbb-dl-btn rbb-dl-protected" href="${escAttr(primaryRgLink.href)}" target="_blank" rel="noopener noreferrer" title="protected.to requires manually clicking through in a new tab — AllDebrid cannot unlock it automatically">
+        <a class="rbb-dl-btn rbb-dl-protected" data-rg-name="${escAttr(release.name)}" href="${escAttr(primaryRgLink.href)}" target="_blank" rel="noopener noreferrer" title="protected.to requires manually clicking through in a new tab — AllDebrid cannot unlock it automatically">
           <span class="rbb-dl-icon" aria-hidden="true">&#8599;</span><span class="rbb-dl-label">protected.to</span>
         </a>
       `;
@@ -1641,8 +1744,14 @@
   function bindDownloadButtons() {
     document.addEventListener('click', event => {
       // .rbb-dl-protected is a plain link to protected.to — let it navigate normally instead
-      // of treating it as an AllDebrid-unlockable button.
-      if (event.target.closest('.rbb-dl-protected')) return;
+      // of treating it as an AllDebrid-unlockable button. Remember the release name first so
+      // the RapidGator file page you land on can pre-fill its rename box with the real title
+      // instead of the hoster's often-cryptic filename (see rememberPendingReleaseName()).
+      const protectedLink = event.target.closest('.rbb-dl-protected');
+      if (protectedLink) {
+        rememberPendingReleaseName(protectedLink.dataset.rgName);
+        return;
+      }
 
       const button = event.target.closest('.rbb-dl-btn');
       if (!button) return;
@@ -1651,6 +1760,28 @@
       event.stopPropagation();
       handleDownloadButtonClick(button);
     });
+  }
+
+  // Keeps the last few release names the user clicked through to protected.to for, each
+  // timestamped, so the RapidGator page can guess which one you're currently downloading.
+  function rememberPendingReleaseName(name) {
+    if (!name) return;
+
+    let list = [];
+    try { list = JSON.parse(getSetting('recentReleaseNames', '[]')); } catch { list = []; }
+
+    list.unshift({ name, at: Date.now() });
+    setSetting('recentReleaseNames', JSON.stringify(list.slice(0, 5)));
+  }
+
+  // Only entries from the last 20 minutes are offered — long enough to cover a slow ad-gate
+  // click-through, short enough that a stale guess from hours ago won't get suggested.
+  function getRecentReleaseNames() {
+    let list = [];
+    try { list = JSON.parse(getSetting('recentReleaseNames', '[]')); } catch { list = []; }
+
+    const cutoff = Date.now() - 20 * 60 * 1000;
+    return list.filter(entry => entry.at >= cutoff);
   }
 
   // Category pills (TV Shows / Games / Movies / ...) filter the grid down to that category.
@@ -3193,6 +3324,18 @@
 
       .rbb-settings-dialog { width: min(420px, calc(100vw - 32px)); }
 
+      /* standalone panel injected on the RapidGator file page itself — the host page has its
+         own plain light theme, so this needs to carry its own spacing rather than relying on
+         .rbb-layout/.rbb-topbar like the RLSBB pages do */
+      .rbb-rg-page-panel {
+        width: min(620px, calc(100vw - 32px));
+        margin: 16px auto;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      }
+
+      .rbb-rg-page-panel .rbb-card-title { font-size: 18px !important; }
+      .rbb-rg-page-panel input#rbb-rg-filename { width: 100%; }
+
       .rbb-lightbox-dialog::backdrop {
         background: rgba(4,8,12,.72);
         backdrop-filter: blur(6px);
@@ -3292,9 +3435,12 @@
     document.head.appendChild(style);
   }
 
+  const onRapidGator = /(^|\.)rapidgator\.net$/i.test(location.hostname);
+  const boot = onRapidGator ? initRapidGatorPage : init;
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', boot);
   } else {
-    init();
+    boot();
   }
 })();
