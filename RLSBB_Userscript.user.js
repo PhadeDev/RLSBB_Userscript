@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.0.3
+// @version      2.0.4
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -2061,11 +2061,18 @@
         status.textContent = `${files.length} files found — using largest (${filename})…`;
       }
 
+      // magnet/files' own links (alldebrid.com/f/...) turned out to serve an HTML login page
+      // rather than the file when fetched anonymously by aria2/GM_download — resolving through
+      // the same link/unlock step already used for hoster links gets a real direct URL instead.
+      status.textContent = 'Resolving direct download link…';
+      const resolved = await allDebridUnlock(best.link);
+      const directUrl = resolved.link || best.link;
+
       if (mode === 'browser') {
-        await browserDownload(best.link, filename);
+        await browserDownload(directUrl, filename);
         status.textContent = 'Download started ✓';
       } else {
-        await localAria2AddUri(best.link, filename, destDir);
+        await localAria2AddUri(directUrl, filename, destDir);
         status.textContent = `Sent to local aria2 ✓ (${destDir})`;
       }
     } catch (error) {
