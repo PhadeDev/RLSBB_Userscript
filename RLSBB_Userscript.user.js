@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.0.6
+// @version      2.0.7
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -2987,6 +2987,19 @@
         grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
         gap: 12px;
         align-items: start;
+      }
+
+      /* post detail pages only ever hold a single card - the dense auto-fill
+         grid above still reserves several empty 300px+ columns beside it,
+         which is what made the detail card look squished into a corner.
+         Fall back to a single centred, full-width column instead. */
+      .rbb-post-mode .rbb-grid {
+        display: block;
+      }
+
+      .rbb-post-mode .rbb-detail-card {
+        max-width: 960px;
+        margin: 0 auto;
       }
 
       .rbb-side {
