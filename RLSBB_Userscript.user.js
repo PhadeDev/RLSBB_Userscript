@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board v11 - Banner Release Picker
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.3.0
+// @version      1.3.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -412,7 +412,7 @@
         </details>
 
         <footer class="rbb-footer">
-          ${isPostPage ? `<span>${data.tag ? esc(data.tag) : ''}</span>` : `<a href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">Open post</a>`}
+          ${isPostPage ? `<span>${data.tag ? esc(data.tag) : ''}</span>` : `<a class="rbb-open-post-link" href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">Open post</a>`}
           ${!isPostPage && data.tag ? `<span>${esc(data.tag)}</span>` : ''}
         </footer>
       </div>
@@ -451,8 +451,17 @@
     if (!isPostPage) {
       card.classList.add('rbb-card-clickable');
       card.addEventListener('click', event => {
-        // let real links (RG/NFO/torrent/open-post) and native <details> toggles behave normally
-        if (event.target.closest('a, summary, button')) return;
+        // Let native <details> toggles and explicit "escape" actions (download buttons,
+        // NFO/screenshot extras, comment-RG links, and the footer's "Open post" link) behave
+        // normally. Everything else — including the image and title <a> tags, which have real
+        // hrefs to the post — should open the lightbox instead of navigating away.
+        if (event.target.closest('summary, button, .rbb-mini-extra, .rbb-comment-rg-link, .rbb-open-post-link')) {
+          return;
+        }
+
+        const link = event.target.closest('a');
+        if (link) event.preventDefault();
+
         openLightbox(card, data);
       });
     }
@@ -463,25 +472,21 @@
   function makeReleaseRow(release, isBest) {
     const chips = release.badges.map(chipHtml).join('');
 
-    // First RapidGator link on the row is the one AllDebrid unlocks — backups still get a
-    // plain link but not their own unlock buttons, matching how the old browser extension
-    // only ever put a green button on the primary download link.
+    // AllDebrid unlocks whichever RapidGator link is first on the row — no need to also show
+    // the raw RapidGator/Backup links, or a separate button per mirror; the download buttons
+    // below replace all of that with one clear action per release.
     const primaryRgLink = release.rgLinks[0];
-
-    const rgLinks = release.rgLinks.length
-      ? release.rgLinks.map((link, index) => `
-        <a class="rbb-rg-action" href="${escAttr(link.href)}" target="_blank" rel="noopener noreferrer">
-          ${esc(index === 0 ? 'RapidGator' : `Backup ${index}`)}
-        </a>
-      `).join('')
-      : `<span class="rbb-no-rg">No RG</span>`;
 
     const downloadButtons = primaryRgLink
       ? `
-        <button type="button" class="rbb-dl-btn rbb-dl-browser" data-rg-url="${escAttr(primaryRgLink.href)}" data-rg-name="${escAttr(release.name)}" title="Unlock via AllDebrid and download in browser">⬇</button>
-        <button type="button" class="rbb-dl-btn rbb-dl-aria2" data-rg-url="${escAttr(primaryRgLink.href)}" data-rg-name="${escAttr(release.name)}" title="Unlock via AllDebrid and send to aria2/NAS">📥</button>
+        <button type="button" class="rbb-dl-btn rbb-dl-browser" data-rg-url="${escAttr(primaryRgLink.href)}" data-rg-name="${escAttr(release.name)}" title="Unlock via AllDebrid, then download in your browser">
+          <span class="rbb-dl-icon" aria-hidden="true">&#8595;</span><span class="rbb-dl-label">Download</span>
+        </button>
+        <button type="button" class="rbb-dl-btn rbb-dl-aria2" data-rg-url="${escAttr(primaryRgLink.href)}" data-rg-name="${escAttr(release.name)}" title="Unlock via AllDebrid, then send to the NAS (aria2)">
+          <span class="rbb-dl-icon" aria-hidden="true">&#8677;</span><span class="rbb-dl-label">To NAS</span>
+        </button>
       `
-      : '';
+      : `<span class="rbb-no-rg">No RapidGator link found</span>`;
 
     const extras = release.extraLinks.length
       ? release.extraLinks.slice(0, 2).map(link => `
@@ -511,7 +516,7 @@
         </div>
 
         <div class="rbb-release-actions">
-          <div class="rbb-release-rg">${rgLinks}${downloadButtons}</div>
+          <div class="rbb-release-rg">${downloadButtons}</div>
           ${extras ? `<div class="rbb-release-extras">${extras}</div>` : ''}
           <span class="rbb-dl-status" data-dl-status></span>
         </div>
@@ -2497,7 +2502,7 @@
 
       .rbb-release-row {
         display: grid;
-        grid-template-columns: 72px minmax(0, 1fr) auto;
+        grid-template-columns: 64px minmax(0, 1fr) 78px;
         gap: 8px;
         align-items: center;
         padding: 8px;
@@ -2507,7 +2512,7 @@
       }
 
       .rbb-detail-card .rbb-release-row {
-        grid-template-columns: 116px minmax(0, 1fr) auto;
+        grid-template-columns: 116px minmax(0, 1fr) 108px;
         gap: 12px;
         padding: 12px;
         border-radius: 16px;
@@ -2622,15 +2627,14 @@
       .rbb-release-actions {
         display: flex;
         flex-direction: column;
-        align-items: flex-end;
+        align-items: stretch;
         gap: 6px;
       }
 
       .rbb-release-rg {
         display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        gap: 7px;
+        flex-direction: column;
+        gap: 5px;
       }
 
       .rbb-rg-action {
@@ -2673,19 +2677,27 @@
       .rbb-settings-btn:hover { filter: brightness(1.15); }
 
       .rbb-dl-btn {
-        display: inline-flex;
+        display: flex;
         align-items: center;
         justify-content: center;
-        min-width: 26px;
-        min-height: 26px;
-        border-radius: 9px;
+        gap: 5px;
+        width: 100%;
+        min-height: 24px;
+        padding: 4px 6px;
+        border-radius: 8px;
         border: 1px solid rgba(255,255,255,.14);
-        font-size: 12px;
+        font-size: 10px;
+        font-weight: 850;
         cursor: pointer;
         line-height: 1;
+        white-space: nowrap;
       }
 
-      .rbb-detail-card .rbb-dl-btn { min-width: 34px; min-height: 34px; font-size: 14px; }
+      .rbb-dl-icon { font-size: 11px; }
+      .rbb-dl-label { overflow: hidden; text-overflow: ellipsis; }
+
+      .rbb-detail-card .rbb-dl-btn { min-height: 32px; padding: 7px 10px; font-size: 12px; }
+      .rbb-detail-card .rbb-dl-icon { font-size: 14px; }
 
       .rbb-dl-browser { background: rgba(77,157,130,.28); color: #b6f2dc; }
       .rbb-dl-browser:hover { background: rgba(77,157,130,.42); }
@@ -2757,6 +2769,7 @@
 
       .rbb-release-extras {
         display: flex;
+        justify-content: flex-end;
         gap: 5px;
         opacity: .75;
       }
