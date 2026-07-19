@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.0.1
+// @version      2.0.2
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -1843,15 +1843,21 @@
   // returning "This API endpoint has been discontinued") in favour of /v4.1/magnet/status —
   // note the version bump is in the URL path itself, not a query param. Status no longer
   // carries download links at all; those now live behind the separate /v4/magnet/files call
-  // (still plain v4), see allDebridMagnetFiles() below.
+  // (still plain v4), see allDebridMagnetFiles() below. v4.1 also dropped the old ?apikey=
+  // query-param auth used everywhere else in this file for a Bearer header instead — sending
+  // the old style here gets a generic "Unauthorized" back rather than any clearer complaint.
   async function allDebridMagnetStatus(id) {
     const { allDebridKey } = getDownloadSettings();
     const url = 'https://api.alldebrid.com/v4.1/magnet/status'
       + '?agent=rlsbb-clean-board'
-      + '&apikey=' + encodeURIComponent(allDebridKey)
       + '&id=' + encodeURIComponent(id);
 
-    const response = await gmRequest({ method: 'GET', url, timeout: 30000 });
+    const response = await gmRequest({
+      method: 'GET',
+      url,
+      headers: { Authorization: 'Bearer ' + allDebridKey },
+      timeout: 30000
+    });
 
     let json;
     try {
