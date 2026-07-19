@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.0.4
+// @version      2.0.5
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -2026,6 +2026,14 @@
     });
   }
 
+  function sanitizeFolderName(name) {
+    return String(name || 'download')
+      .replace(/[\\/:*?"<>|]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 150) || 'download';
+  }
+
   async function handleMagnetButtonClick(mode, magnetUri, suggestedName, group) {
     const status = group.querySelector('[data-magnet-status]');
     const buttons = group.querySelectorAll('.rbb-magnet-btn');
@@ -2052,28 +2060,78 @@
       const files = await allDebridMagnetFiles(uploaded.id);
       if (!files.length) throw new Error('AllDebrid reported ready but returned no files.');
 
-      // Multi-file torrents (season packs, repacks with extras, etc.) — grab the biggest file,
-      // same "pick the real content" heuristic used elsewhere in this script for archives.
-      const best = files.reduce((a, b) => (Number(b.size || 0) > Number(a.size || 0) ? b : a));
-      const filename = best.name || suggestedName;
+      // A single big video file (+ nfo/sample/poster junk) is a "pick the real content" case —
+      // just grab the largest file, as before. But a repack/split-archive release (multiple
+      // substantial parts that only work TOGETHER, e.g. fg-01.bin/fg-02.bin/fg-03.bin + setup.exe)
+      // needs every required part, or the download is useless on its own — this is exactly what
+      // went wrong the first time this shipped: "largest file only" silently dropped the other
+      // 33GB+ of required parts for a FitGirl repack. Multi-part is detected by counting files
+      // that are substantial in their own right (>=100MB) — junk like .nfo/.txt/.md5 never
+      // crosses that bar, so a real movie release still resolves to single-file mode even with
+      // a handful of small extras alongside the one video file.
+      const SIGNIFICANT_BYTES = 100 * 1024 * 1024;
+      const significant = files.filter(f => Number(f.size || 0) >= SIGNIFICANT_BYTES);
+      const isMultiPart = significant.length > 1;
 
-      if (files.length > 1) {
-        status.textContent = `${files.length} files found — using largest (${filename})…`;
+      let toDownload;
+      let folderName = '';
+      if (isMultiPart) {
+        // "optional-*"/sample extras (bonus soundtracks, alternate VO language packs, preview
+        // clips) are genuinely optional per the release's own naming convention — everything
+        // else in a multi-part release is required, however small (checksums, setup.exe).
+        const isSkippable = name => /(^|[-_. ])(optional|sample)($|[-_. ])/i.test(name || '');
+        toDownload = files.filter(f => !isSkippable(f.name));
+        if (!toDownload.length) toDownload = files; // don't strand the user with an empty queue
+        folderName = sanitizeFolderName(uploaded.name || suggestedName);
+      } else {
+        const best = files.reduce((a, b) => (Number(b.size || 0) > Number(a.size || 0) ? b : a));
+        toDownload = [best];
       }
 
-      // magnet/files' own links (alldebrid.com/f/...) turned out to serve an HTML login page
-      // rather than the file when fetched anonymously by aria2/GM_download — resolving through
-      // the same link/unlock step already used for hoster links gets a real direct URL instead.
-      status.textContent = 'Resolving direct download link…';
-      const resolved = await allDebridUnlock(best.link);
-      const directUrl = resolved.link || best.link;
+      let done = 0;
+      let failed = 0;
+      for (const file of toDownload) {
+        const filename = file.name || suggestedName;
+        done += 1;
+        status.textContent = isMultiPart
+          ? `Resolving file ${done}/${toDownload.length}: ${filename}…`
+          : 'Resolving direct download link…';
 
-      if (mode === 'browser') {
-        await browserDownload(directUrl, filename);
-        status.textContent = 'Download started ✓';
+        try {
+          // magnet/files' own links (alldebrid.com/f/...) turned out to serve an HTML login
+          // page rather than the file when fetched anonymously by aria2/GM_download — resolving
+          // through the same link/unlock step already used for hoster links gets a real direct
+          // URL instead.
+          const resolved = await allDebridUnlock(file.link);
+          const directUrl = resolved.link || file.link;
+
+          if (mode === 'browser') {
+            // GM_download's `name` accepts forward slashes to create a subfolder inside the
+            // browser's own Downloads directory, so a multi-part release still lands together.
+            const browserName = isMultiPart ? `${folderName}/${filename}` : filename;
+            await browserDownload(directUrl, browserName);
+          } else {
+            // aria2 creates missing directories under `dir` itself, so nesting the release's
+            // own folder name under the user's chosen destination is enough to keep every part
+            // together instead of dumping loose files straight into it.
+            const jobDir = isMultiPart ? `${destDir}/${folderName}` : destDir;
+            await localAria2AddUri(directUrl, filename, jobDir);
+          }
+        } catch (fileError) {
+          failed += 1;
+          logError(`Magnet file "${filename}" failed:`, fileError);
+        }
+      }
+
+      if (failed) {
+        status.textContent = `${done - failed}/${toDownload.length} file(s) queued, ${failed} failed — see console`;
+        status.style.color = '#c0392b';
+      } else if (isMultiPart) {
+        status.textContent = mode === 'browser'
+          ? `${toDownload.length} files started ✓ (in "${folderName}")`
+          : `${toDownload.length} files sent to local aria2 ✓ (${destDir}/${folderName})`;
       } else {
-        await localAria2AddUri(directUrl, filename, destDir);
-        status.textContent = `Sent to local aria2 ✓ (${destDir})`;
+        status.textContent = mode === 'browser' ? 'Download started ✓' : `Sent to local aria2 ✓ (${destDir})`;
       }
     } catch (error) {
       logError('Magnet handling failed:', error);
