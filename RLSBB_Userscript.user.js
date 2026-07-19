@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.4.4
+// @version      1.4.5
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -375,13 +375,6 @@
       `
       : '';
 
-    // On post pages the comment RapidGator links are already scrapable from the live DOM.
-    // On grid cards (homepage/search archives) real comments aren't rendered, so this stays
-    // an empty slot until the lightbox fetches the post and fills it in (see loadComments()).
-    const commentPanel = data.commentRgLinks.length
-      ? makeCommentLinksPanel(data.commentRgLinks)
-      : '';
-
     card.innerHTML = `
       <a class="rbb-image" href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">
         ${data.image ? `<img src="${escAttr(data.image)}" alt="">` : `<div class="rbb-no-image">No image</div>`}
@@ -417,8 +410,6 @@
           ${bestRow}
           ${showAll}
         </section>
-
-        <div class="rbb-comment-rg-slot" data-comment-rg-slot>${commentPanel}</div>
 
         <details class="rbb-comments" data-comments-url="${escAttr(data.commentsUrl || data.url + '#comments')}" ${isPostPage ? 'open' : ''}>
           <summary>${esc(data.commentsText || 'Comments')}</summary>
@@ -614,23 +605,6 @@
     if (text === 'bluray') return 'bluray';
     if (text === 'atmos') return 'atmos';
     return 'default';
-  }
-
-  function makeCommentLinksPanel(links) {
-    if (!links.length) return '';
-
-    return `
-      <details class="rbb-comment-rg ${isPostPage ? 'rbb-force-open' : ''}" ${isPostPage ? 'open' : ''}>
-        <summary>RapidGator links from comments (${links.length})</summary>
-        <div class="rbb-comment-rg-list">
-          ${links.slice(0, 30).map((link, index) => `
-            <a class="rbb-comment-rg-link" href="${escAttr(link.href)}" target="_blank" rel="noopener noreferrer">
-              Comment RG ${index + 1}
-            </a>
-          `).join('')}
-        </div>
-      </details>
-    `;
   }
 
   function extractArticle(article, doc = document) {
@@ -1421,21 +1395,6 @@
         comments.querySelectorAll('script, iframe, style, form, #respond').forEach(n => n.remove());
         body.innerHTML = '';
         body.appendChild(comments.cloneNode(true));
-      }
-
-      // grid/lightbox cards don't have real comments in their own DOM, so the comment-RG
-      // panel is only fillable once we've fetched the actual post page here
-      const slot = details.closest('.rbb-card')?.querySelector('[data-comment-rg-slot]');
-      if (slot && !slot.childElementCount) {
-        const rgLinks = extractCommentRapidGatorLinks(doc);
-        if (rgLinks.length) {
-          slot.innerHTML = makeCommentLinksPanel(rgLinks);
-          const rgDetails = slot.querySelector('.rbb-comment-rg');
-          if (rgDetails) {
-            rgDetails.open = true;
-            rgDetails.classList.add('rbb-force-open');
-          }
-        }
       }
 
       details.dataset.loaded = '1';
@@ -3026,8 +2985,8 @@
       .rbb-card .rbb-release-actions canvas,
       .rbb-card .rbb-release-actions iframe,
       .rbb-card .rbb-release-actions object,
-      .rbb-card .rbb-release-rg > a:not(.rbb-rg-action),
-      .rbb-card .rbb-release-actions > a:not(.rbb-rg-action):not(.rbb-mini-extra) {
+      .rbb-card .rbb-release-rg > a:not(.rbb-rg-action):not(.rbb-dl-protected),
+      .rbb-card .rbb-release-actions > a:not(.rbb-rg-action):not(.rbb-mini-extra):not(.rbb-dl-protected) {
         display: none !important;
       }
 
@@ -3094,10 +3053,85 @@
       .rbb-comments-body .comment-list,
       .rbb-comments-body #comments {
         color: #dbe8f5 !important;
+        background: transparent !important;
+        list-style: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      /* the site's own comment markup (.author/.avatar/.name/.messageBox/.date/.content) has
+         its own light-theme box styling that otherwise bleeds through as a white panel here */
+      .rbb-comments-body li.comment {
+        display: flex !important;
+        gap: 8px !important;
+        padding: 9px 0 !important;
+        margin: 0 !important;
+        border: 0 !important;
+        border-top: 1px solid rgba(255,255,255,.07) !important;
+        background: transparent !important;
+      }
+
+      .rbb-comments-body li.comment:first-child { border-top: 0 !important; }
+
+      .rbb-comments-body .author {
+        flex-shrink: 0 !important;
+        width: 30px !important;
+        background: transparent !important;
+      }
+
+      .rbb-comments-body .avatar {
+        width: 30px !important;
+        height: 30px !important;
+        border-radius: 50% !important;
+        background: rgba(255,255,255,.08) !important;
+        overflow: hidden !important;
+      }
+
+      .rbb-comments-body .avatar img,
+      .rbb-comments-body .name img {
+        width: 100% !important;
+        max-width: 220px !important;
+        height: auto !important;
+        border-radius: 6px !important;
+        display: block !important;
+      }
+
+      .rbb-comments-body .name {
+        font-weight: 850 !important;
+        color: #dce8f4 !important;
+        background: transparent !important;
+        font-size: 12px !important;
+      }
+
+      .rbb-comments-body .messageBox {
+        flex: 1 !important;
+        min-width: 0 !important;
+        background: transparent !important;
+        border: 0 !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        max-height: none !important;
+      }
+
+      .rbb-comments-body .date {
+        color: var(--rbb-faint) !important;
+        font-size: 10px !important;
+        background: transparent !important;
+        margin-bottom: 4px !important;
+      }
+
+      .rbb-comments-body .content,
+      .rbb-comments-body .content p {
+        background: transparent !important;
+        color: #dbe8f5 !important;
+        margin: 0 !important;
+        line-height: 1.5 !important;
+        word-break: break-word !important;
       }
 
       .rbb-comments-body a {
         color: var(--rbb-blue) !important;
+        word-break: break-all !important;
       }
 
       .rbb-footer {
