@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.0.5
+// @version      2.0.6
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -854,16 +854,28 @@
   function extractReleases(content) {
     const releases = [];
     const paragraphs = [...content.querySelectorAll('p')];
+    // Some posts have malformed nested <p> tags in the source HTML, which the browser
+    // auto-closes into two separate sibling <p>s: one with "Release Name: X" and no
+    // RapidGator link, immediately followed by one with "Download: ...RAPIDGATOR" and
+    // no name. Carry the name forward one paragraph so the Download-only segment isn't
+    // rejected for having "Download" as its derived name.
+    let pendingReleaseName = '';
 
     for (const p of paragraphs) {
       const segments = segmentParagraphIntoReleases(p);
+      let paragraphHasRgLink = false;
 
       for (const segment of segments) {
         const rgAnchors = segment.anchors.filter(isRapidGatorLink);
         if (!rgAnchors.length) continue;
+        paragraphHasRgLink = true;
 
         let releaseName = segment.name || deriveReleaseName(segment.text);
         releaseName = cleanReleaseName(releaseName);
+
+        if ((!releaseName || /nitroflare|download|single file|rapidgator backup/i.test(releaseName)) && pendingReleaseName) {
+          releaseName = pendingReleaseName;
+        }
 
         if (!releaseName || /nitroflare|download|single file|rapidgator backup/i.test(releaseName)) {
           continue;
@@ -900,6 +912,13 @@
           rgLinks,
           extraLinks
         });
+      }
+
+      if (paragraphHasRgLink) {
+        pendingReleaseName = '';
+      } else {
+        const nameMatch = p.textContent.match(/release\s*name\s*:\s*([^]*?)(?=size\s*:|links\s*:|download\s*:|$)/i);
+        pendingReleaseName = nameMatch ? cleanReleaseName(cleanText(nameMatch[1])) : '';
       }
     }
 
