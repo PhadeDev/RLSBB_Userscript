@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.0.0
+// @version      2.0.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -1839,9 +1839,14 @@
     return magnet; // { id, name, size, ready, ... }
   }
 
+  // AllDebrid deprecated the old /v4/magnet/status (confirmed 2026-07-19 by the API itself
+  // returning "This API endpoint has been discontinued") in favour of /v4.1/magnet/status —
+  // note the version bump is in the URL path itself, not a query param. Status no longer
+  // carries download links at all; those now live behind the separate /v4/magnet/files call
+  // (still plain v4), see allDebridMagnetFiles() below.
   async function allDebridMagnetStatus(id) {
     const { allDebridKey } = getDownloadSettings();
-    const url = 'https://api.alldebrid.com/v4/magnet/status'
+    const url = 'https://api.alldebrid.com/v4.1/magnet/status'
       + '?agent=rlsbb-clean-board'
       + '&apikey=' + encodeURIComponent(allDebridKey)
       + '&id=' + encodeURIComponent(id);
@@ -1860,12 +1865,55 @@
       throw new Error((json.error && json.error.message) || 'AllDebrid could not check this magnet.');
     }
 
-    return json.data && json.data.magnets; // { status, statusCode, links: [...], ... }
+    const magnets = (json.data && json.data.magnets) || [];
+    const magnet = Array.isArray(magnets) ? magnets[0] : magnets;
+    return magnet; // { id, filename, size, status, statusCode, downloaded, seeders, downloadSpeed }
+  }
+
+  // Files (and their download links) are a separate call from status as of the v4.1 split —
+  // response nests subfolders via an `e` array, so this flattens the whole tree into a plain
+  // list of { name, size, link } using the real field names (n/s/l), not filename/size/link.
+  async function allDebridMagnetFiles(id) {
+    const { allDebridKey } = getDownloadSettings();
+    const url = 'https://api.alldebrid.com/v4/magnet/files'
+      + '?agent=rlsbb-clean-board'
+      + '&apikey=' + encodeURIComponent(allDebridKey)
+      + '&id[]=' + encodeURIComponent(id);
+
+    const response = await gmRequest({ method: 'GET', url, timeout: 30000 });
+    log('AllDebrid magnet files responded:', response.status, response.responseText.slice(0, 400));
+
+    let json;
+    try {
+      json = JSON.parse(response.responseText);
+    } catch {
+      logError('AllDebrid magnet files response was not valid JSON:', response.responseText.slice(0, 500));
+      throw new Error('AllDebrid returned an unreadable files response.');
+    }
+
+    if (json.status !== 'success') {
+      throw new Error((json.error && json.error.message) || 'AllDebrid could not list files for this magnet.');
+    }
+
+    const magnets = (json.data && json.data.magnets) || [];
+    const magnet = Array.isArray(magnets) ? magnets[0] : magnets;
+    const rawFiles = (magnet && magnet.files) || [];
+
+    const flat = [];
+    (function walk(entries) {
+      for (const entry of entries || []) {
+        if (entry.l) flat.push({ name: entry.n, size: Number(entry.s || 0), link: entry.l });
+        if (entry.e) walk(entry.e); // subfolder
+      }
+    })(rawFiles);
+
+    return flat;
   }
 
   // Polls status every 5s until AllDebrid reports the magnet ready (or errors/times out),
   // calling onProgress with a short human-readable string after every check so the UI can show
-  // live status instead of looking frozen during what can be a multi-minute wait.
+  // live status instead of looking frozen during what can be a multi-minute wait. Only waits
+  // for "ready" — the actual files/links come from a separate allDebridMagnetFiles() call.
   async function pollMagnetUntilReady(id, onProgress, timeoutMs = 10 * 60 * 1000) {
     const startedAt = Date.now();
 
@@ -1874,13 +1922,12 @@
       log('AllDebrid magnet status:', JSON.stringify(status).slice(0, 300));
 
       const statusText = String((status && status.status) || '').toLowerCase();
-      const links = (status && status.links) || [];
 
-      if (links.length || statusText.includes('ready')) {
+      if (statusText.includes('ready')) {
         return status;
       }
 
-      if (statusText.includes('error') || statusText.includes('fail') || statusText.includes('dead')) {
+      if (statusText.includes('error') || statusText.includes('fail') || statusText.includes('dead') || statusText.includes('expired')) {
         throw new Error(`AllDebrid: magnet ${status.status || 'failed'} (no seeders/dead torrent?)`);
       }
 
@@ -1983,20 +2030,18 @@
       const uploaded = await allDebridUploadMagnet(magnetUri);
       log('AllDebrid magnet accepted:', uploaded);
 
-      let ready = uploaded;
-      if (!uploaded.ready && !(uploaded.links && uploaded.links.length)) {
-        ready = await pollMagnetUntilReady(uploaded.id, text => { status.textContent = text; });
-      } else if (!ready.links) {
-        ready = await allDebridMagnetStatus(uploaded.id);
+      if (!uploaded.ready) {
+        await pollMagnetUntilReady(uploaded.id, text => { status.textContent = text; });
       }
 
-      const files = ready.links || [];
+      status.textContent = 'Fetching file list…';
+      const files = await allDebridMagnetFiles(uploaded.id);
       if (!files.length) throw new Error('AllDebrid reported ready but returned no files.');
 
       // Multi-file torrents (season packs, repacks with extras, etc.) — grab the biggest file,
       // same "pick the real content" heuristic used elsewhere in this script for archives.
       const best = files.reduce((a, b) => (Number(b.size || 0) > Number(a.size || 0) ? b : a));
-      const filename = best.filename || suggestedName;
+      const filename = best.name || suggestedName;
 
       if (files.length > 1) {
         status.textContent = `${files.length} files found — using largest (${filename})…`;
