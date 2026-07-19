@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RLSBB Clean Board v11 - Banner Release Picker
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.2.1
-// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
+// @version      1.3.0
+// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
 // @match        https://www.rlsbb.in/*
@@ -12,7 +12,12 @@
 // @connect      www.rlsbb.in
 // @connect      post.rlsbb.in
 // @connect      search.rlsbb.in
+// @connect      api.alldebrid.com
+// @connect      192.168.0.200
 // @grant        GM_xmlhttpRequest
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_download
 // @run-at       document-end
 // @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
 // @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
@@ -78,6 +83,26 @@
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }
 
+  // ---- download settings: AllDebrid API key + aria2 RPC, stored via GM_setValue so they
+  // never touch the (public) GitHub repo — entered once through the Settings dialog ----
+  function getSetting(key, fallback) {
+    if (typeof GM_getValue === 'function') return GM_getValue(key, fallback);
+    return localStorage.getItem('rbb_' + key) ?? fallback;
+  }
+
+  function setSetting(key, value) {
+    if (typeof GM_setValue === 'function') GM_setValue(key, value);
+    else localStorage.setItem('rbb_' + key, value);
+  }
+
+  function getDownloadSettings() {
+    return {
+      allDebridKey: getSetting('allDebridKey', ''),
+      aria2Rpc: getSetting('aria2Rpc', 'http://192.168.0.200:6800/jsonrpc'),
+      aria2Secret: getSetting('aria2Secret', '')
+    };
+  }
+
   function init() {
     const articles = [...document.querySelectorAll('#post-wrapper article, article.post')];
 
@@ -90,6 +115,8 @@
 
     injectStyles();
     if (!isPostPage) injectLightbox();
+    injectSettingsDialog();
+    bindDownloadButtons();
     document.body.classList.add('rbb-clean-body', isPostPage ? 'rbb-post-mode' : 'rbb-feed-mode');
 
     nextPageUrl = findNextPageUrl(document);
@@ -147,6 +174,8 @@
           <summary>Categories</summary>
           <div class="rbb-menu-panel" data-categories></div>
         </details>
+
+        <button type="button" class="rbb-settings-btn" data-open-settings title="Download settings (AllDebrid + aria2)">&#9881;</button>
       </header>
 
       ${isPostPage ? '' : `
@@ -423,7 +452,7 @@
       card.classList.add('rbb-card-clickable');
       card.addEventListener('click', event => {
         // let real links (RG/NFO/torrent/open-post) and native <details> toggles behave normally
-        if (event.target.closest('a, summary')) return;
+        if (event.target.closest('a, summary, button')) return;
         openLightbox(card, data);
       });
     }
@@ -434,6 +463,11 @@
   function makeReleaseRow(release, isBest) {
     const chips = release.badges.map(chipHtml).join('');
 
+    // First RapidGator link on the row is the one AllDebrid unlocks — backups still get a
+    // plain link but not their own unlock buttons, matching how the old browser extension
+    // only ever put a green button on the primary download link.
+    const primaryRgLink = release.rgLinks[0];
+
     const rgLinks = release.rgLinks.length
       ? release.rgLinks.map((link, index) => `
         <a class="rbb-rg-action" href="${escAttr(link.href)}" target="_blank" rel="noopener noreferrer">
@@ -441,6 +475,13 @@
         </a>
       `).join('')
       : `<span class="rbb-no-rg">No RG</span>`;
+
+    const downloadButtons = primaryRgLink
+      ? `
+        <button type="button" class="rbb-dl-btn rbb-dl-browser" data-rg-url="${escAttr(primaryRgLink.href)}" data-rg-name="${escAttr(release.name)}" title="Unlock via AllDebrid and download in browser">⬇</button>
+        <button type="button" class="rbb-dl-btn rbb-dl-aria2" data-rg-url="${escAttr(primaryRgLink.href)}" data-rg-name="${escAttr(release.name)}" title="Unlock via AllDebrid and send to aria2/NAS">📥</button>
+      `
+      : '';
 
     const extras = release.extraLinks.length
       ? release.extraLinks.slice(0, 2).map(link => `
@@ -470,8 +511,9 @@
         </div>
 
         <div class="rbb-release-actions">
-          <div class="rbb-release-rg">${rgLinks}</div>
+          <div class="rbb-release-rg">${rgLinks}${downloadButtons}</div>
           ${extras ? `<div class="rbb-release-extras">${extras}</div>` : ''}
+          <span class="rbb-dl-status" data-dl-status></span>
         </div>
       </div>
     `;
@@ -1198,6 +1240,8 @@
       state.categoriesOpen = event.currentTarget.open;
       saveState();
     });
+
+    app.querySelector('[data-open-settings]')?.addEventListener('click', openSettingsDialog);
   }
 
   function applyFiltersAndSort() {
@@ -1365,20 +1409,150 @@
   }
 
   function fetchText(url) {
+    return gmRequest({ method: 'GET', url }).then(response => response.responseText);
+  }
+
+  // Generic cross-origin request helper (AllDebrid's API and the NAS aria2 RPC are both
+  // off-site from rlsbb.in, so this always needs GM_xmlhttpRequest + a matching @connect).
+  function gmRequest(details) {
     return new Promise((resolve, reject) => {
       if (typeof GM_xmlhttpRequest === 'function') {
         GM_xmlhttpRequest({
-          method: 'GET',
-          url,
-          onload: response => resolve(response.responseText),
-          onerror: reject
+          ...details,
+          onload: resolve,
+          onerror: reject,
+          ontimeout: reject
         });
       } else {
-        fetch(url, { credentials: 'include' })
-          .then(response => response.text())
+        fetch(details.url, {
+          method: details.method || 'GET',
+          headers: details.headers,
+          body: details.data,
+          credentials: 'include'
+        })
+          .then(async response => ({ status: response.status, responseText: await response.text() }))
           .then(resolve)
           .catch(reject);
       }
+    });
+  }
+
+  async function allDebridUnlock(link) {
+    const { allDebridKey } = getDownloadSettings();
+    if (!allDebridKey) {
+      openSettingsDialog();
+      throw new Error('Add your AllDebrid API key in Settings first.');
+    }
+
+    const url = 'https://api.alldebrid.com/v4/link/unlock'
+      + '?agent=rlsbb-clean-board'
+      + '&apikey=' + encodeURIComponent(allDebridKey)
+      + '&link=' + encodeURIComponent(link);
+
+    const response = await gmRequest({ method: 'GET', url });
+
+    let json;
+    try {
+      json = JSON.parse(response.responseText);
+    } catch {
+      throw new Error('AllDebrid returned an unreadable response.');
+    }
+
+    if (json.status !== 'success') {
+      throw new Error((json.error && json.error.message) || 'AllDebrid could not unlock this link.');
+    }
+
+    return json.data; // { link, filename, filesize, ... }
+  }
+
+  function browserDownload(url, filename) {
+    if (typeof GM_download === 'function') {
+      GM_download({ url, name: filename, saveAs: false });
+    } else {
+      window.open(url, '_blank', 'noopener');
+    }
+  }
+
+  async function aria2AddUri(url, filename) {
+    const { aria2Rpc, aria2Secret } = getDownloadSettings();
+    if (!aria2Rpc) {
+      openSettingsDialog();
+      throw new Error('Add your aria2 RPC URL in Settings first.');
+    }
+
+    const params = [];
+    if (aria2Secret) params.push('token:' + aria2Secret);
+    params.push([url]);
+    params.push({ out: filename, 'remove-control-file': 'true' });
+
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'rbb-' + Date.now(),
+      method: 'aria2.addUri',
+      params
+    });
+
+    const response = await gmRequest({
+      method: 'POST',
+      url: aria2Rpc,
+      data: body,
+      headers: { 'Content-Type': 'application/json' }
+    });
+
+    let json;
+    try {
+      json = JSON.parse(response.responseText);
+    } catch {
+      throw new Error('aria2 returned an unreadable response.');
+    }
+
+    if (json.error) throw new Error(json.error.message || 'aria2 rejected the job.');
+    return json.result; // gid
+  }
+
+  async function handleDownloadButtonClick(button) {
+    const rgUrl = button.dataset.rgUrl;
+    const releaseName = button.dataset.rgName || 'download';
+    const mode = button.classList.contains('rbb-dl-aria2') ? 'aria2' : 'browser';
+    const status = button.closest('.rbb-release-actions')?.querySelector('[data-dl-status]');
+
+    button.disabled = true;
+    button.classList.add('rbb-dl-busy');
+    if (status) { status.textContent = 'Unlocking via AllDebrid…'; status.classList.remove('rbb-dl-error'); }
+
+    try {
+      const unlocked = await allDebridUnlock(rgUrl);
+      const directUrl = unlocked.link;
+      const filename = unlocked.filename || releaseName;
+
+      if (mode === 'browser') {
+        browserDownload(directUrl, filename);
+        if (status) status.textContent = 'Download started ✓';
+      } else {
+        await aria2AddUri(directUrl, filename);
+        if (status) status.textContent = 'Sent to aria2 ✓';
+      }
+    } catch (error) {
+      if (status) {
+        status.textContent = error.message || 'Failed';
+        status.classList.add('rbb-dl-error');
+      }
+    } finally {
+      button.disabled = false;
+      button.classList.remove('rbb-dl-busy');
+      setTimeout(() => { if (status) { status.textContent = ''; status.classList.remove('rbb-dl-error'); } }, 6000);
+    }
+  }
+
+  // One delegated listener covers every card, including cards cloned into the lightbox later
+  function bindDownloadButtons() {
+    document.addEventListener('click', event => {
+      const button = event.target.closest('.rbb-dl-btn');
+      if (!button) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      handleDownloadButtonClick(button);
     });
   }
 
@@ -1434,6 +1608,87 @@
 
   function closeLightbox() {
     const dialog = document.getElementById('rbb-lightbox-dialog');
+    if (!dialog || !dialog.open) return;
+
+    dialog.close();
+    document.body.style.overflow = '';
+  }
+
+  function injectSettingsDialog() {
+    if (document.getElementById('rbb-settings-dialog')) return;
+
+    const dialog = document.createElement('dialog');
+    dialog.id = 'rbb-settings-dialog';
+    dialog.className = 'rbb-lightbox-dialog rbb-settings-dialog';
+    dialog.innerHTML = `
+      <button type="button" class="rbb-lightbox-close" aria-label="Close">&times;</button>
+      <div class="rbb-card rbb-detail-card">
+        <div class="rbb-content">
+          <h2 class="rbb-card-title">Download settings</h2>
+          <p class="rbb-description" style="max-width:none;">
+            Stored only in this browser (Tampermonkey storage) — never written back to the script's GitHub repo.
+          </p>
+
+          <form class="rbb-settings-form">
+            <label class="rbb-settings-field">
+              <span>AllDebrid API key</span>
+              <input type="password" name="allDebridKey" autocomplete="off" placeholder="from alldebrid.com/apikeys">
+            </label>
+            <label class="rbb-settings-field">
+              <span>aria2 RPC URL</span>
+              <input type="text" name="aria2Rpc" autocomplete="off" placeholder="http://192.168.0.200:6800/jsonrpc">
+            </label>
+            <label class="rbb-settings-field">
+              <span>aria2 RPC secret (optional)</span>
+              <input type="password" name="aria2Secret" autocomplete="off" placeholder="leave blank if none">
+            </label>
+            <div class="rbb-settings-actions">
+              <span class="rbb-settings-status" data-settings-status></span>
+              <button type="submit" class="rbb-rg-action">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    dialog.addEventListener('click', event => {
+      if (event.target === dialog) closeSettingsDialog();
+    });
+    dialog.querySelector('.rbb-lightbox-close').addEventListener('click', closeSettingsDialog);
+    dialog.addEventListener('cancel', () => { document.body.style.overflow = ''; });
+    dialog.addEventListener('close', () => { document.body.style.overflow = ''; });
+
+    dialog.querySelector('.rbb-settings-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      setSetting('allDebridKey', form.allDebridKey.value.trim());
+      setSetting('aria2Rpc', form.aria2Rpc.value.trim());
+      setSetting('aria2Secret', form.aria2Secret.value.trim());
+
+      const status = dialog.querySelector('[data-settings-status]');
+      status.textContent = 'Saved ✓';
+      setTimeout(() => { status.textContent = ''; }, 2500);
+    });
+  }
+
+  function openSettingsDialog() {
+    const dialog = document.getElementById('rbb-settings-dialog');
+    if (!dialog) return;
+
+    const settings = getDownloadSettings();
+    const form = dialog.querySelector('.rbb-settings-form');
+    form.allDebridKey.value = settings.allDebridKey;
+    form.aria2Rpc.value = settings.aria2Rpc;
+    form.aria2Secret.value = settings.aria2Secret;
+
+    if (!dialog.open) dialog.showModal();
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeSettingsDialog() {
+    const dialog = document.getElementById('rbb-settings-dialog');
     if (!dialog || !dialog.open) return;
 
     dialog.close();
@@ -1693,7 +1948,7 @@
 
       .rbb-topbar {
         display: grid;
-        grid-template-columns: 190px minmax(300px, 1fr) 104px;
+        grid-template-columns: 190px minmax(300px, 1fr) 104px 48px;
         gap: 9px;
         align-items: center;
         margin-bottom: 8px;
@@ -2404,6 +2659,96 @@
 
       .rbb-rg-action:hover { filter: brightness(1.12); }
 
+      .rbb-settings-btn {
+        height: 48px;
+        border-radius: 14px;
+        border: 1px solid var(--rbb-border);
+        background: linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.028));
+        color: var(--rbb-text);
+        font-size: 18px;
+        cursor: pointer;
+        box-shadow: var(--rbb-shadow);
+      }
+
+      .rbb-settings-btn:hover { filter: brightness(1.15); }
+
+      .rbb-dl-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 26px;
+        min-height: 26px;
+        border-radius: 9px;
+        border: 1px solid rgba(255,255,255,.14);
+        font-size: 12px;
+        cursor: pointer;
+        line-height: 1;
+      }
+
+      .rbb-detail-card .rbb-dl-btn { min-width: 34px; min-height: 34px; font-size: 14px; }
+
+      .rbb-dl-browser { background: rgba(77,157,130,.28); color: #b6f2dc; }
+      .rbb-dl-browser:hover { background: rgba(77,157,130,.42); }
+
+      .rbb-dl-aria2 { background: rgba(45,105,175,.28); color: #cfe6ff; }
+      .rbb-dl-aria2:hover { background: rgba(45,105,175,.42); }
+
+      .rbb-dl-btn:disabled { opacity: .55; cursor: default; }
+
+      .rbb-dl-busy {
+        animation: rbb-dl-pulse 1s ease-in-out infinite;
+      }
+
+      @keyframes rbb-dl-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: .45; }
+      }
+
+      .rbb-dl-status {
+        display: block;
+        width: 100%;
+        text-align: right;
+        font-size: 10px;
+        color: var(--rbb-blue);
+        min-height: 12px;
+      }
+
+      .rbb-dl-status.rbb-dl-error { color: #ff9d9d; }
+
+      .rbb-settings-form {
+        display: grid;
+        gap: 12px;
+        margin-top: 6px;
+      }
+
+      .rbb-settings-field {
+        display: grid;
+        gap: 5px;
+        font-size: 12px;
+        color: var(--rbb-muted);
+      }
+
+      .rbb-settings-field input {
+        height: 36px;
+        border-radius: 9px;
+        border: 1px solid var(--rbb-border-strong);
+        background: rgba(0,0,0,.20);
+        color: var(--rbb-text);
+        padding: 0 10px;
+        font-size: 13px;
+        outline: none;
+      }
+
+      .rbb-settings-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 4px;
+      }
+
+      .rbb-settings-status { font-size: 12px; color: #9ef0c8; }
+
       .rbb-no-rg,
       .rbb-muted {
         color: var(--rbb-faint);
@@ -2589,6 +2934,8 @@
       /* the dialog itself carries no background so its rounded corners show through;
          .rbb-detail-card (the cloned post card) supplies the actual panel look */
       .rbb-lightbox-dialog .rbb-card { margin: 0; }
+
+      .rbb-settings-dialog { width: min(420px, calc(100vw - 32px)); }
 
       .rbb-lightbox-dialog::backdrop {
         background: rgba(4,8,12,.72);
