@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.6.0
+// @version      1.6.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -287,7 +287,7 @@
   function initProtectedToPage() {
     const heading = document.querySelector('.Encrypted-folder');
     const linkNodes = [...document.querySelectorAll('.Encrypted-box .links a[href]')];
-    if (!heading || !linkNodes.length) return; // not a multi-link splitter page — leave alone
+    if (!heading || !linkNodes.length) return; // not a splitter page at all — leave alone
 
     const headingText = cleanText(heading.textContent);
     const sizeMatch = headingText.match(/\[\s*([^\]]+?)\s*\]\s*$/);
@@ -296,8 +296,16 @@
     const links = linkNodes.map(a => a.href);
 
     // same cross-page memory used for the RapidGator page's smart rename, in case the user
-    // clicks straight into a part instead of using the tray
+    // clicks straight into a part instead of using the tray — worth doing even when there's
+    // only one link, since the name is already known regardless of how many hops follow
     rememberPendingReleaseName(releaseName);
+
+    // A single link here is usually just another intermediate protected.to hop, not a real
+    // multi-part release — showing "split into 1 part" in that case was actively misleading
+    // (implied there was something to copy/paste when there wasn't). Only show the panel for
+    // genuine multi-part releases; for one link, stay out of the way and let the user click
+    // through normally.
+    if (links.length < 2) return;
 
     injectStyles();
 
