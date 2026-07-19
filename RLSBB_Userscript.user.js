@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.0.7
+// @version      2.1.0
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -44,6 +44,43 @@
   let nextPageUrl = '';
   let isLoading = false;
   const state = loadState();
+
+  // ---- in-flight download-op tracking ----
+  // AllDebrid unlock (and, worse, magnet caching, which can poll for up to 10 minutes) only
+  // exists as JS running in this tab -- if the tab is closed or navigated away mid-unlock, that
+  // work is genuinely lost and has to be started over. Once a browser download or aria2 send-off
+  // has actually been kicked off, though, it keeps running independently (the browser's own
+  // download manager, or the aria2 daemon) and the tab is safe to close. This counter plus the
+  // beforeunload listener below turns "is it safe to close this?" from a guess into a real
+  // browser-native confirmation prompt during the risky window only.
+  let activeDownloadOps = 0;
+  function beginDownloadOp() { activeDownloadOps += 1; }
+  function endDownloadOp() { activeDownloadOps = Math.max(0, activeDownloadOps - 1); }
+
+  window.addEventListener('beforeunload', event => {
+    if (activeDownloadOps > 0) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
+
+  // Ticks a status element every second with a live elapsed-seconds count instead of a single
+  // static "Unlocking..." label that never changes -- the actual complaint being answered here
+  // is "I can't tell if this is frozen or just slow." Returns a stop function.
+  function startElapsedTicker(statusEl, prefix) {
+    const startedAt = Date.now();
+    const tick = () => {
+      if (!statusEl) return;
+      const secs = Math.floor((Date.now() - startedAt) / 1000);
+      statusEl.textContent = `${prefix} ${secs}s`;
+      statusEl.title = secs < 8
+        ? 'Unlocking via AllDebrid -- keep this tab open until it says Started/Sent.'
+        : 'Some hosts take 30s+ to unlock via AllDebrid. Keep this tab open -- check the console (F12) for live progress.';
+    };
+    tick();
+    const intervalId = setInterval(tick, 1000);
+    return () => clearInterval(intervalId);
+  }
 
   function defaultState() {
     return {
@@ -226,6 +263,7 @@
           <button type="button" class="rbb-settings-btn" id="rbb-rg-settings" title="Download settings (AllDebrid + aria2)" style="height:auto; padding:6px 10px; font-size:14px;">&#9881;</button>
         </div>
         <span class="rbb-dl-status" id="rbb-rg-status" style="display:block; text-align:left; margin-top:8px;"></span>
+        <span class="rbb-dl-progress" id="rbb-rg-progress" style="max-width:260px;"></span>
       </div>
     `;
 
@@ -241,18 +279,19 @@
     const input = document.getElementById('rbb-rg-filename');
     const button = document.getElementById(mode === 'aria2' ? 'rbb-rg-tonas' : 'rbb-rg-download');
     const status = document.getElementById('rbb-rg-status');
+    const progress = document.getElementById('rbb-rg-progress');
     const chosenName = (input.value || '').trim() || 'download';
 
+    beginDownloadOp();
     button.disabled = true;
     button.classList.add('rbb-dl-busy');
-    status.textContent = 'Unlocking…';
     status.classList.remove('rbb-dl-error');
-
-    const slowNotice = setTimeout(() => { status.textContent = 'Still unlocking…'; }, 8000);
+    if (progress) progress.classList.add('rbb-dl-progress-active');
+    const stopTicker = startElapsedTicker(status, 'Unlocking…');
 
     try {
       const unlocked = await allDebridUnlock(location.href);
-      clearTimeout(slowNotice);
+      stopTicker();
 
       // preserve the real file extension even if the user's chosen name doesn't include one
       const finalName = /\.[a-z0-9]{2,4}$/i.test(chosenName)
@@ -264,18 +303,22 @@
       if (mode === 'browser') {
         await browserDownload(unlocked.link, finalName);
         status.textContent = `Started ✓ ${seconds}s`;
+        status.title = 'Safe to close this tab now.';
       } else {
         await aria2AddUri(unlocked.link, finalName);
         status.textContent = `Sent ✓ ${seconds}s`;
+        status.title = 'Safe to close this tab now.';
       }
     } catch (error) {
-      clearTimeout(slowNotice);
+      stopTicker();
       logError('RapidGator page download failed:', error);
       status.textContent = error.code === 'LINK_DOWN' ? '❌ File removed from host' : (error.message || 'Failed');
       status.classList.add('rbb-dl-error');
     } finally {
+      endDownloadOp();
       button.disabled = false;
       button.classList.remove('rbb-dl-busy');
+      if (progress) progress.classList.remove('rbb-dl-progress-active');
     }
   }
 
@@ -723,6 +766,7 @@
           <div class="rbb-release-rg">${downloadButtons}</div>
           ${extras ? `<div class="rbb-release-extras">${extras}</div>` : ''}
           <span class="rbb-dl-status" data-dl-status></span>
+          <span class="rbb-dl-progress" data-dl-progress></span>
         </div>
       </div>
     `;
@@ -2004,6 +2048,31 @@
       .rbb-magnet-btn.rbb-magnet-settings:hover { background: #6b6b6b !important; }
       .rbb-magnet-btn:disabled { opacity: .55 !important; cursor: default !important; }
       .rbb-magnet-status { all: initial !important; font: 11px/1.3 -apple-system, Segoe UI, Roboto, Arial, sans-serif !important; color: #444 !important; margin-left: 6px !important; }
+      .rbb-magnet-progress {
+        all: initial !important;
+        display: none !important;
+        height: 3px !important;
+        width: 60px !important;
+        margin-left: 6px !important;
+        border-radius: 999px !important;
+        overflow: hidden !important;
+        background: rgba(0,0,0,.15) !important;
+        vertical-align: middle !important;
+      }
+      .rbb-magnet-progress.rbb-magnet-progress-active { display: inline-block !important; }
+      .rbb-magnet-progress.rbb-magnet-progress-active::after {
+        content: '' !important;
+        display: block !important;
+        height: 100% !important;
+        width: 40% !important;
+        background: #2b6fa4 !important;
+        border-radius: 999px !important;
+        animation: rbb-magnet-sweep 1.1s ease-in-out infinite !important;
+      }
+      @keyframes rbb-magnet-sweep {
+        0% { margin-left: -40%; }
+        100% { margin-left: 100%; }
+      }
     `;
     document.head.appendChild(style);
   }
@@ -2021,6 +2090,7 @@
         <button type="button" class="rbb-magnet-btn rbb-magnet-local" title="Cache via AllDebrid, then send to local aria2 (choose folder)">➟ aria2</button>
         <button type="button" class="rbb-magnet-btn rbb-magnet-settings" title="Download settings (AllDebrid key, aria2 RPC/secret)">⚙</button>
         <span class="rbb-magnet-status" data-magnet-status></span>
+        <span class="rbb-magnet-progress" data-magnet-progress></span>
       `;
 
       link.insertAdjacentElement('afterend', group);
@@ -2055,6 +2125,7 @@
 
   async function handleMagnetButtonClick(mode, magnetUri, suggestedName, group) {
     const status = group.querySelector('[data-magnet-status]');
+    const progress = group.querySelector('[data-magnet-progress]');
     const buttons = group.querySelectorAll('.rbb-magnet-btn');
 
     let destDir = '';
@@ -2064,15 +2135,18 @@
       if (destDir === null) return; // cancelled
     }
 
+    beginDownloadOp();
     buttons.forEach(b => { b.disabled = true; });
     status.textContent = 'Uploading magnet to AllDebrid…';
+    status.title = 'Caching this magnet can take a while for less-seeded torrents — keep this tab open until it says a download has started/been sent.';
+    if (progress) progress.classList.add('rbb-magnet-progress-active');
 
     try {
       const uploaded = await allDebridUploadMagnet(magnetUri);
       log('AllDebrid magnet accepted:', uploaded);
 
       if (!uploaded.ready) {
-        await pollMagnetUntilReady(uploaded.id, text => { status.textContent = text; });
+        await pollMagnetUntilReady(uploaded.id, text => { status.textContent = `${text} — keep this tab open`; });
       }
 
       status.textContent = 'Fetching file list…';
@@ -2147,18 +2221,20 @@
         status.style.color = '#c0392b';
       } else if (isMultiPart) {
         status.textContent = mode === 'browser'
-          ? `${toDownload.length} files started ✓ (in "${folderName}")`
-          : `${toDownload.length} files sent to local aria2 ✓ (${destDir}/${folderName})`;
+          ? `${toDownload.length} files started ✓ (in "${folderName}") — safe to close this tab`
+          : `${toDownload.length} files sent to local aria2 ✓ (${destDir}/${folderName}) — safe to close this tab`;
       } else {
-        status.textContent = mode === 'browser' ? 'Download started ✓' : `Sent to local aria2 ✓ (${destDir})`;
+        status.textContent = mode === 'browser' ? 'Download started ✓ — safe to close this tab' : `Sent to local aria2 ✓ (${destDir}) — safe to close this tab`;
       }
     } catch (error) {
       logError('Magnet handling failed:', error);
       status.textContent = error.message || 'Failed';
       status.style.color = '#c0392b';
     } finally {
+      endDownloadOp();
       buttons.forEach(b => { b.disabled = false; });
-      setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 12000);
+      if (progress) progress.classList.remove('rbb-magnet-progress-active');
+      setTimeout(() => { status.textContent = ''; status.style.color = ''; status.title = ''; }, 12000);
     }
   }
 
@@ -2192,41 +2268,33 @@
     const rgUrl = button.dataset.rgUrl;
     const releaseName = button.dataset.rgName || 'download';
     const mode = button.classList.contains('rbb-dl-aria2') ? 'aria2' : 'browser';
-    const status = button.closest('.rbb-release-actions')?.querySelector('[data-dl-status]');
+    const actions = button.closest('.rbb-release-actions');
+    const status = actions?.querySelector('[data-dl-status]');
+    const progress = actions?.querySelector('[data-dl-progress]');
 
+    beginDownloadOp();
     button.disabled = true;
     button.classList.add('rbb-dl-busy');
-    if (status) {
-      status.textContent = 'Unlocking…';
-      status.title = 'Unlocking via AllDebrid…';
-      status.classList.remove('rbb-dl-error');
-    }
-
-    // AllDebrid's unlock can genuinely take 20-30s+ for some hosts — reassure rather than
-    // leave the button looking frozen with no explanation.
-    const slowNotice = setTimeout(() => {
-      if (status) {
-        status.textContent = 'Still unlocking…';
-        status.title = 'Some hosts take 30s+ to unlock via AllDebrid — check the console (F12) for progress.';
-      }
-    }, 8000);
+    if (status) status.classList.remove('rbb-dl-error');
+    if (progress) progress.classList.add('rbb-dl-progress-active');
+    const stopTicker = status ? startElapsedTicker(status, 'Unlocking…') : null;
 
     try {
       const unlocked = await allDebridUnlock(rgUrl);
-      clearTimeout(slowNotice);
+      if (stopTicker) stopTicker();
       const directUrl = unlocked.link;
       const filename = unlocked.filename || releaseName;
       const seconds = (unlocked.elapsedMs / 1000).toFixed(1);
 
       if (mode === 'browser') {
         await browserDownload(directUrl, filename);
-        if (status) { status.textContent = `Started ✓ ${seconds}s`; status.title = `Download started (unlocked in ${seconds}s)`; }
+        if (status) { status.textContent = `Started ✓ ${seconds}s`; status.title = `Download started (unlocked in ${seconds}s) — safe to close this tab now.`; }
       } else {
         await aria2AddUri(directUrl, filename);
-        if (status) { status.textContent = `Sent ✓ ${seconds}s`; status.title = `Sent to aria2 (unlocked in ${seconds}s)`; }
+        if (status) { status.textContent = `Sent ✓ ${seconds}s`; status.title = `Sent to aria2 (unlocked in ${seconds}s) — safe to close this tab now.`; }
       }
     } catch (error) {
-      clearTimeout(slowNotice);
+      if (stopTicker) stopTicker();
       logError('Download button failed:', error);
 
       // LINK_DOWN means AllDebrid confirmed the file no longer exists on the hoster at all —
@@ -2244,8 +2312,10 @@
         status.classList.add('rbb-dl-error');
       }
     } finally {
+      endDownloadOp();
       button.disabled = false;
       button.classList.remove('rbb-dl-busy');
+      if (progress) progress.classList.remove('rbb-dl-progress-active');
       setTimeout(() => {
         if (status) { status.textContent = ''; status.title = ''; status.classList.remove('rbb-dl-error'); }
       }, 10000);
@@ -3571,6 +3641,38 @@
       }
 
       .rbb-dl-status.rbb-dl-error { color: #ff9d9d; }
+
+      /* indeterminate sweep bar - a stronger "this is genuinely still working" signal than
+         the status text alone, since AllDebrid unlock/caching has no real progress percentage
+         for most single-file hosts. */
+      .rbb-dl-progress {
+        display: none;
+        height: 3px;
+        width: 100%;
+        margin-top: 5px;
+        border-radius: 999px;
+        overflow: hidden;
+        background: rgba(255,255,255,.08);
+      }
+
+      .rbb-dl-progress.rbb-dl-progress-active {
+        display: block;
+      }
+
+      .rbb-dl-progress.rbb-dl-progress-active::after {
+        content: '';
+        display: block;
+        height: 100%;
+        width: 40%;
+        background: var(--rbb-blue);
+        border-radius: 999px;
+        animation: rbb-dl-sweep 1.1s ease-in-out infinite;
+      }
+
+      @keyframes rbb-dl-sweep {
+        0% { margin-left: -40%; }
+        100% { margin-left: 100%; }
+      }
 
       .rbb-settings-form {
         display: grid;
