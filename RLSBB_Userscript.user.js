@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.4.1
+// @version      1.4.2
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -457,7 +457,7 @@
         // NFO/screenshot extras, comment-RG links, and the footer's "Open post" link) behave
         // normally. Everything else — including the image and title <a> tags, which have real
         // hrefs to the post — should open the lightbox instead of navigating away.
-        if (event.target.closest('summary, button, .rbb-mini-extra, .rbb-comment-rg-link, .rbb-open-post-link')) {
+        if (event.target.closest('summary, button, .rbb-mini-extra, .rbb-comment-rg-link, .rbb-open-post-link, .rbb-dl-protected')) {
           return;
         }
 
@@ -476,19 +476,31 @@
 
     // AllDebrid unlocks whichever RapidGator link is first on the row — no need to also show
     // the raw RapidGator/Backup links, or a separate button per mirror; the download buttons
-    // below replace all of that with one clear action per release.
-    const primaryRgLink = release.rgLinks[0];
+    // below replace all of that with one clear action per release. Prefer a real rapidgator.net
+    // link over a protected.to wrapper if both exist, since AllDebrid can only unlock the former.
+    const primaryRgLink = release.rgLinks.find(link => !link.isProtected) || release.rgLinks[0];
 
-    const downloadButtons = primaryRgLink
-      ? `
+    let downloadButtons;
+    if (!primaryRgLink) {
+      downloadButtons = `<span class="rbb-no-rg">No RapidGator link found</span>`;
+    } else if (primaryRgLink.isProtected) {
+      // protected.to is a manual click-through page (ads/captcha) — AllDebrid can't unlock it,
+      // so this just opens it in a new tab instead of pretending it can be automated.
+      downloadButtons = `
+        <a class="rbb-dl-btn rbb-dl-protected" href="${escAttr(primaryRgLink.href)}" target="_blank" rel="noopener noreferrer" title="protected.to requires manually clicking through in a new tab — AllDebrid cannot unlock it automatically">
+          <span class="rbb-dl-icon" aria-hidden="true">&#8599;</span><span class="rbb-dl-label">protected.to</span>
+        </a>
+      `;
+    } else {
+      downloadButtons = `
         <button type="button" class="rbb-dl-btn rbb-dl-browser" data-rg-url="${escAttr(primaryRgLink.href)}" data-rg-name="${escAttr(release.name)}" title="Unlock via AllDebrid, then download in your browser">
           <span class="rbb-dl-icon" aria-hidden="true">&#8595;</span><span class="rbb-dl-label">Download</span>
         </button>
         <button type="button" class="rbb-dl-btn rbb-dl-aria2" data-rg-url="${escAttr(primaryRgLink.href)}" data-rg-name="${escAttr(release.name)}" title="Unlock via AllDebrid, then send to the NAS (aria2)">
           <span class="rbb-dl-icon" aria-hidden="true">&#8677;</span><span class="rbb-dl-label">To NAS</span>
         </button>
-      `
-      : `<span class="rbb-no-rg">No RapidGator link found</span>`;
+      `;
+    }
 
     const extras = release.extraLinks.length
       ? release.extraLinks.slice(0, 2).map(link => `
@@ -693,7 +705,11 @@
           href: abs(a.href),
           label: cleanText(a.textContent) || 'RapidGator',
           className: a.className || 'host-rapidgator',
-          rlsId: a.dataset?.rlsId || a.getAttribute('data_rls_id') || ''
+          rlsId: a.dataset?.rlsId || a.getAttribute('data_rls_id') || '',
+          // protected.to is a manual click-through wrapper (ads/captcha) around the real
+          // RapidGator link — AllDebrid can't unlock it directly, so it needs a plain "open
+          // in a new tab" action instead of the automated unlock buttons.
+          isProtected: /protected\.to/i.test(a.href)
         }));
 
         const extraLinks = segment.anchors
@@ -1624,6 +1640,10 @@
   // One delegated listener covers every card, including cards cloned into the lightbox later
   function bindDownloadButtons() {
     document.addEventListener('click', event => {
+      // .rbb-dl-protected is a plain link to protected.to — let it navigate normally instead
+      // of treating it as an AllDebrid-unlockable button.
+      if (event.target.closest('.rbb-dl-protected')) return;
+
       const button = event.target.closest('.rbb-dl-btn');
       if (!button) return;
 
@@ -1662,7 +1682,11 @@
     dialog.id = 'rbb-lightbox-dialog';
     dialog.className = 'rbb-lightbox-dialog';
     dialog.innerHTML = `
-      <button type="button" class="rbb-lightbox-close" aria-label="Close">&times;</button>
+      <button type="button" class="rbb-lightbox-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+          <path d="M5 5 L19 19 M19 5 L5 19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"></path>
+        </svg>
+      </button>
       <div class="rbb-lightbox-body"></div>
     `;
 
@@ -1717,7 +1741,11 @@
     dialog.id = 'rbb-settings-dialog';
     dialog.className = 'rbb-lightbox-dialog rbb-settings-dialog';
     dialog.innerHTML = `
-      <button type="button" class="rbb-lightbox-close" aria-label="Close">&times;</button>
+      <button type="button" class="rbb-lightbox-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+          <path d="M5 5 L19 19 M19 5 L5 19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"></path>
+        </svg>
+      </button>
       <div class="rbb-card rbb-detail-card">
         <div class="rbb-content">
           <h2 class="rbb-card-title">Download settings</h2>
@@ -2815,6 +2843,9 @@
       .rbb-dl-aria2 { background: rgba(45,105,175,.28); color: #cfe6ff; }
       .rbb-dl-aria2:hover { background: rgba(45,105,175,.42); }
 
+      .rbb-dl-protected { background: rgba(214,166,76,.24); color: #f7dca3; text-decoration: none; }
+      .rbb-dl-protected:hover { background: rgba(214,166,76,.38); }
+
       .rbb-dl-btn:disabled { opacity: .55; cursor: default; }
 
       .rbb-dl-busy {
@@ -3078,31 +3109,48 @@
         .rbb-lightbox-dialog[open] { animation: none; }
       }
 
+      /* !important throughout: the host page's own theme (WPFront scroll-to-top, gallery
+         lightbox plugins, etc.) styles generic round icon buttons aggressively, and has
+         collided with this button twice already — all:unset alone isn't enough to beat
+         another author stylesheet's rules, only the browser's own defaults. */
       .rbb-lightbox-close {
-        all: unset;
-        box-sizing: border-box;
-        position: absolute;
-        top: 10px;
-        right: 10px;
-        width: 30px;
-        height: 30px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 50%;
-        border: 1px solid rgba(255,255,255,.22);
-        background: rgba(10,16,22,.88);
-        color: var(--rbb-text);
-        font-size: 16px;
-        font-family: inherit;
-        line-height: 1;
-        cursor: pointer;
-        box-shadow: 0 6px 18px rgba(0,0,0,.35);
-        z-index: 5;
+        all: unset !important;
+        box-sizing: border-box !important;
+        position: absolute !important;
+        top: 10px !important;
+        right: 10px !important;
+        width: 30px !important;
+        height: 30px !important;
+        min-width: 30px !important;
+        min-height: 30px !important;
+        max-width: 30px !important;
+        max-height: 30px !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border-radius: 50% !important;
+        border: 1px solid rgba(255,255,255,.22) !important;
+        background: rgba(10,16,22,.88) !important;
+        color: #edf4fb !important;
+        line-height: 1 !important;
+        cursor: pointer !important;
+        box-shadow: 0 6px 18px rgba(0,0,0,.35) !important;
+        z-index: 5 !important;
       }
 
-      .rbb-lightbox-close:hover { background: #223142; border-color: rgba(255,255,255,.34); }
-      .rbb-lightbox-close:focus-visible { outline: 2px solid var(--rbb-blue); outline-offset: 2px; }
+      .rbb-lightbox-close svg { display: block !important; width: 14px !important; height: 14px !important; color: inherit !important; }
+
+      .rbb-lightbox-close:hover {
+        background: #223142 !important;
+        border-color: rgba(255,255,255,.34) !important;
+      }
+
+      .rbb-lightbox-close:focus-visible {
+        outline: 2px solid var(--rbb-blue) !important;
+        outline-offset: 2px !important;
+      }
 
       @media (max-width: 980px) {
         #rbb-clean { width: calc(100vw - 20px); }
