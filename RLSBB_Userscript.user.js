@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.4.0
+// @version      1.4.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -1420,6 +1420,13 @@
     return gmRequest({ method: 'GET', url }).then(response => response.responseText);
   }
 
+  // Prefixed console logging so the download flow is actually debuggable from DevTools —
+  // AllDebrid's unlock endpoint can be genuinely slow for some hosts, and previously there
+  // was no way to tell "still working" apart from "silently stuck".
+  const LOG_PREFIX = '[RLSBB Clean Board]';
+  function log(...args) { console.log(LOG_PREFIX, ...args); }
+  function logError(...args) { console.error(LOG_PREFIX, ...args); }
+
   // Generic cross-origin request helper (AllDebrid's API and the NAS aria2 RPC are both
   // off-site from rlsbb.in, so this always needs GM_xmlhttpRequest + a matching @connect).
   function gmRequest(details) {
@@ -1457,32 +1464,48 @@
       + '&apikey=' + encodeURIComponent(allDebridKey)
       + '&link=' + encodeURIComponent(link);
 
-    const response = await gmRequest({ method: 'GET', url });
+    log('AllDebrid unlock request for', link);
+    const startedAt = Date.now();
+
+    // 60s timeout: AllDebrid's unlock can take a while for some hosts (it may be doing its
+    // own fetch from the hoster behind the scenes), but it shouldn't ever hang forever.
+    const response = await gmRequest({ method: 'GET', url, timeout: 60000 });
+    const elapsedMs = Date.now() - startedAt;
+    log('AllDebrid responded in', elapsedMs, 'ms —', response.status, response.responseText.slice(0, 300));
 
     let json;
     try {
       json = JSON.parse(response.responseText);
     } catch {
+      logError('AllDebrid response was not valid JSON:', response.responseText.slice(0, 500));
       throw new Error('AllDebrid returned an unreadable response.');
     }
 
     if (json.status !== 'success') {
+      logError('AllDebrid unlock failed:', json.error);
       throw new Error((json.error && json.error.message) || 'AllDebrid could not unlock this link.');
     }
 
-    return json.data; // { link, filename, filesize, ... }
+    return { ...json.data, elapsedMs }; // { link, filename, filesize, ..., elapsedMs }
   }
 
   function browserDownload(url, filename) {
+    log('Starting browser download:', filename, url);
     return new Promise((resolve, reject) => {
       if (typeof GM_download === 'function') {
         GM_download({
           url,
           name: filename,
           saveAs: false,
-          onload: () => resolve(),
-          onerror: error => reject(new Error((error && error.error) || 'Browser refused the download (check for a Tampermonkey permission prompt).')),
-          ontimeout: () => reject(new Error('Download timed out — check for a Tampermonkey permission prompt.'))
+          onload: () => { log('Browser download started:', filename); resolve(); },
+          onerror: error => {
+            logError('GM_download error:', error);
+            reject(new Error((error && error.error) || 'Browser refused the download (check for a Tampermonkey permission prompt).'));
+          },
+          ontimeout: () => {
+            logError('GM_download timed out for', filename);
+            reject(new Error('Download timed out — check for a Tampermonkey permission prompt.'));
+          }
         });
       } else {
         try {
@@ -1514,21 +1537,32 @@
       params
     });
 
+    log('aria2.addUri request:', filename, '->', aria2Rpc);
+
     const response = await gmRequest({
       method: 'POST',
       url: aria2Rpc,
       data: body,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000
     });
+
+    log('aria2 responded:', response.status, response.responseText.slice(0, 300));
 
     let json;
     try {
       json = JSON.parse(response.responseText);
     } catch {
+      logError('aria2 response was not valid JSON:', response.responseText.slice(0, 500));
       throw new Error('aria2 returned an unreadable response.');
     }
 
-    if (json.error) throw new Error(json.error.message || 'aria2 rejected the job.');
+    if (json.error) {
+      logError('aria2 rejected the job:', json.error);
+      throw new Error(json.error.message || 'aria2 rejected the job.');
+    }
+
+    log('aria2 queued job, gid:', json.result);
     return json.result; // gid
   }
 
@@ -1540,29 +1574,50 @@
 
     button.disabled = true;
     button.classList.add('rbb-dl-busy');
-    if (status) { status.textContent = 'Unlocking via AllDebrid…'; status.classList.remove('rbb-dl-error'); }
+    if (status) {
+      status.textContent = 'Unlocking…';
+      status.title = 'Unlocking via AllDebrid…';
+      status.classList.remove('rbb-dl-error');
+    }
+
+    // AllDebrid's unlock can genuinely take 20-30s+ for some hosts — reassure rather than
+    // leave the button looking frozen with no explanation.
+    const slowNotice = setTimeout(() => {
+      if (status) {
+        status.textContent = 'Still unlocking…';
+        status.title = 'Some hosts take 30s+ to unlock via AllDebrid — check the console (F12) for progress.';
+      }
+    }, 8000);
 
     try {
       const unlocked = await allDebridUnlock(rgUrl);
+      clearTimeout(slowNotice);
       const directUrl = unlocked.link;
       const filename = unlocked.filename || releaseName;
+      const seconds = (unlocked.elapsedMs / 1000).toFixed(1);
 
       if (mode === 'browser') {
         await browserDownload(directUrl, filename);
-        if (status) status.textContent = 'Download started ✓';
+        if (status) { status.textContent = `Started ✓ ${seconds}s`; status.title = `Download started (unlocked in ${seconds}s)`; }
       } else {
         await aria2AddUri(directUrl, filename);
-        if (status) status.textContent = 'Sent to aria2 ✓';
+        if (status) { status.textContent = `Sent ✓ ${seconds}s`; status.title = `Sent to aria2 (unlocked in ${seconds}s)`; }
       }
     } catch (error) {
+      clearTimeout(slowNotice);
+      logError('Download button failed:', error);
       if (status) {
-        status.textContent = error.message || 'Failed';
+        const message = error.message || 'Failed';
+        status.textContent = message.length > 22 ? message.slice(0, 21) + '…' : message;
+        status.title = message;
         status.classList.add('rbb-dl-error');
       }
     } finally {
       button.disabled = false;
       button.classList.remove('rbb-dl-busy');
-      setTimeout(() => { if (status) { status.textContent = ''; status.classList.remove('rbb-dl-error'); } }, 6000);
+      setTimeout(() => {
+        if (status) { status.textContent = ''; status.title = ''; status.classList.remove('rbb-dl-error'); }
+      }, 10000);
     }
   }
 
