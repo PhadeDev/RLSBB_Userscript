@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.4.2
+// @version      1.4.3
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -18,6 +18,7 @@
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_download
+// @grant        GM_info
 // @run-at       document-end
 // @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
 // @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
@@ -82,6 +83,17 @@
 
   function saveState() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  // Shown in the topbar so it's obvious from a screenshot whether Tampermonkey has actually
+  // picked up the latest version — its auto-update check isn't instant even with
+  // @updateURL/@downloadURL set correctly.
+  function scriptVersion() {
+    try {
+      return (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '?';
+    } catch {
+      return '?';
+    }
   }
 
   // ---- download settings: AllDebrid API key + aria2 RPC, stored via GM_setValue so they
@@ -166,7 +178,7 @@
           <div class="rbb-logo">RBB</div>
           <div>
             <div class="rbb-title">ReleaseBB</div>
-            <div class="rbb-subtitle">${isPostPage ? 'detail picker' : 'release picker'}</div>
+            <div class="rbb-subtitle">${isPostPage ? 'detail picker' : 'release picker'} &middot; v${escAttr(scriptVersion())}</div>
           </div>
         </div>
 
@@ -2120,6 +2132,9 @@
         margin-top: 4px;
         color: var(--rbb-muted);
         font-size: 10px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .rbb-search {
