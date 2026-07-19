@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board v11 - Banner Release Picker
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.3.1
+// @version      1.3.2
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, AllDebrid-unlock download buttons (browser + aria2/NAS), homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -1471,11 +1471,25 @@
   }
 
   function browserDownload(url, filename) {
-    if (typeof GM_download === 'function') {
-      GM_download({ url, name: filename, saveAs: false });
-    } else {
-      window.open(url, '_blank', 'noopener');
-    }
+    return new Promise((resolve, reject) => {
+      if (typeof GM_download === 'function') {
+        GM_download({
+          url,
+          name: filename,
+          saveAs: false,
+          onload: () => resolve(),
+          onerror: error => reject(new Error((error && error.error) || 'Browser refused the download (check for a Tampermonkey permission prompt).')),
+          ontimeout: () => reject(new Error('Download timed out — check for a Tampermonkey permission prompt.'))
+        });
+      } else {
+        try {
+          window.open(url, '_blank', 'noopener');
+          resolve();
+        } catch (error) {
+          reject(error);
+        }
+      }
+    });
   }
 
   async function aria2AddUri(url, filename) {
@@ -1531,7 +1545,7 @@
       const filename = unlocked.filename || releaseName;
 
       if (mode === 'browser') {
-        browserDownload(directUrl, filename);
+        await browserDownload(directUrl, filename);
         if (status) status.textContent = 'Download started ✓';
       } else {
         await aria2AddUri(directUrl, filename);
@@ -2678,26 +2692,28 @@
 
       .rbb-dl-btn {
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 5px;
+        gap: 2px;
         width: 100%;
-        min-height: 24px;
-        padding: 4px 6px;
+        min-height: 34px;
+        padding: 4px 2px;
         border-radius: 8px;
         border: 1px solid rgba(255,255,255,.14);
-        font-size: 10px;
         font-weight: 850;
         cursor: pointer;
-        line-height: 1;
-        white-space: nowrap;
+        line-height: 1.15;
+        white-space: normal;
+        text-align: center;
       }
 
-      .rbb-dl-icon { font-size: 11px; }
-      .rbb-dl-label { overflow: hidden; text-overflow: ellipsis; }
+      .rbb-dl-icon { font-size: 12px; }
+      .rbb-dl-label { font-size: 9px; }
 
-      .rbb-detail-card .rbb-dl-btn { min-height: 32px; padding: 7px 10px; font-size: 12px; }
+      .rbb-detail-card .rbb-dl-btn { flex-direction: row; min-height: 32px; padding: 7px 10px; gap: 6px; }
       .rbb-detail-card .rbb-dl-icon { font-size: 14px; }
+      .rbb-detail-card .rbb-dl-label { font-size: 12px; }
 
       .rbb-dl-browser { background: rgba(77,157,130,.28); color: #b6f2dc; }
       .rbb-dl-browser:hover { background: rgba(77,157,130,.42); }
