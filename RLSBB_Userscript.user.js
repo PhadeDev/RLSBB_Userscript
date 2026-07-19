@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      1.6.1
-// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, and auto-expanded post details.
+// @version      2.0.0
+// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
 // @match        https://www.rlsbb.in/*
@@ -12,12 +12,14 @@
 // @match        https://www.rapidgator.net/file/*
 // @match        http://protected.to/*
 // @match        https://protected.to/*
+// @match        *://*/*
 // @connect      rlsbb.in
 // @connect      www.rlsbb.in
 // @connect      post.rlsbb.in
 // @connect      search.rlsbb.in
 // @connect      api.alldebrid.com
 // @connect      192.168.0.200
+// @connect      127.0.0.1
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -117,7 +119,12 @@
     return {
       allDebridKey: getSetting('allDebridKey', ''),
       aria2Rpc: getSetting('aria2Rpc', 'http://192.168.0.200:6800/jsonrpc'),
-      aria2Secret: getSetting('aria2Secret', '')
+      aria2Secret: getSetting('aria2Secret', ''),
+      // Separate local aria2 instance (runs on this PC, not the NAS) so magnet downloads can
+      // land in a folder you pick, rather than the NAS pipeline's fixed 2SORT path.
+      localAria2Rpc: getSetting('localAria2Rpc', 'http://127.0.0.1:6802/jsonrpc'),
+      localAria2Secret: getSetting('localAria2Secret', ''),
+      localAria2Dir: getSetting('localAria2Dir', '/home/Phaderon/Downloads')
     };
   }
 
@@ -1735,6 +1742,291 @@
     return json.result; // gid
   }
 
+  // Local aria2 (this PC, not the NAS) — used by the magnet-link helper so downloads can land
+  // wherever the user chooses instead of the NAS pipeline's fixed 2SORT path. Same JSON-RPC
+  // shape as aria2AddUri() above, just a different endpoint/secret and an explicit `dir`.
+  async function localAria2AddUri(url, filename, dir) {
+    const { localAria2Rpc, localAria2Secret } = getDownloadSettings();
+    if (!localAria2Rpc) {
+      openSettingsDialog();
+      throw new Error('Add your local aria2 RPC URL in Settings first.');
+    }
+
+    const params = [];
+    if (localAria2Secret) params.push('token:' + localAria2Secret);
+    params.push([url]);
+
+    const options = { out: filename, 'remove-control-file': 'true' };
+    if (dir) options.dir = dir;
+    params.push(options);
+
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 'rbb-' + Date.now(),
+      method: 'aria2.addUri',
+      params
+    });
+
+    log('local aria2.addUri request:', filename, '->', localAria2Rpc, 'dir:', dir || '(default)');
+
+    const response = await gmRequest({
+      method: 'POST',
+      url: localAria2Rpc,
+      data: body,
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
+
+    log('local aria2 responded:', response.status, response.responseText.slice(0, 300));
+
+    let json;
+    try {
+      json = JSON.parse(response.responseText);
+    } catch {
+      logError('local aria2 response was not valid JSON:', response.responseText.slice(0, 500));
+      throw new Error('Local aria2 returned an unreadable response.');
+    }
+
+    if (json.error) {
+      logError('local aria2 rejected the job:', json.error);
+      throw new Error(json.error.message || 'Local aria2 rejected the job.');
+    }
+
+    log('local aria2 queued job, gid:', json.result);
+    return json.result; // gid
+  }
+
+  // ---- AllDebrid magnet caching ----
+  // Unlike a hoster link, a magnet can't be unlocked instantly -- AllDebrid has to fetch/seed
+  // the torrent on their own servers first. Upload registers it (often instant for already-
+  // popular torrents), then status is polled until AllDebrid reports it ready, at which point
+  // it returns direct download links per file -- no separate link/unlock call needed for these.
+  async function allDebridUploadMagnet(magnetUri) {
+    const { allDebridKey } = getDownloadSettings();
+    if (!allDebridKey) {
+      openSettingsDialog();
+      throw new Error('Add your AllDebrid API key in Settings first.');
+    }
+
+    const url = 'https://api.alldebrid.com/v4/magnet/upload'
+      + '?agent=rlsbb-clean-board'
+      + '&apikey=' + encodeURIComponent(allDebridKey)
+      + '&magnets[]=' + encodeURIComponent(magnetUri);
+
+    log('AllDebrid magnet upload request for', magnetUri.slice(0, 80) + '…');
+    const response = await gmRequest({ method: 'GET', url, timeout: 30000 });
+    log('AllDebrid magnet upload responded:', response.status, response.responseText.slice(0, 400));
+
+    let json;
+    try {
+      json = JSON.parse(response.responseText);
+    } catch {
+      logError('AllDebrid magnet upload response was not valid JSON:', response.responseText.slice(0, 500));
+      throw new Error('AllDebrid returned an unreadable response.');
+    }
+
+    if (json.status !== 'success') {
+      logError('AllDebrid magnet upload failed:', json.error);
+      throw new Error((json.error && json.error.message) || 'AllDebrid could not accept this magnet.');
+    }
+
+    const magnet = json.data && json.data.magnets && json.data.magnets[0];
+    if (!magnet || magnet.error) {
+      const message = magnet && magnet.error && magnet.error.message;
+      throw new Error(message || 'AllDebrid rejected this magnet.');
+    }
+
+    return magnet; // { id, name, size, ready, ... }
+  }
+
+  async function allDebridMagnetStatus(id) {
+    const { allDebridKey } = getDownloadSettings();
+    const url = 'https://api.alldebrid.com/v4/magnet/status'
+      + '?agent=rlsbb-clean-board'
+      + '&apikey=' + encodeURIComponent(allDebridKey)
+      + '&id=' + encodeURIComponent(id);
+
+    const response = await gmRequest({ method: 'GET', url, timeout: 30000 });
+
+    let json;
+    try {
+      json = JSON.parse(response.responseText);
+    } catch {
+      logError('AllDebrid magnet status response was not valid JSON:', response.responseText.slice(0, 500));
+      throw new Error('AllDebrid returned an unreadable status response.');
+    }
+
+    if (json.status !== 'success') {
+      throw new Error((json.error && json.error.message) || 'AllDebrid could not check this magnet.');
+    }
+
+    return json.data && json.data.magnets; // { status, statusCode, links: [...], ... }
+  }
+
+  // Polls status every 5s until AllDebrid reports the magnet ready (or errors/times out),
+  // calling onProgress with a short human-readable string after every check so the UI can show
+  // live status instead of looking frozen during what can be a multi-minute wait.
+  async function pollMagnetUntilReady(id, onProgress, timeoutMs = 10 * 60 * 1000) {
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < timeoutMs) {
+      const status = await allDebridMagnetStatus(id);
+      log('AllDebrid magnet status:', JSON.stringify(status).slice(0, 300));
+
+      const statusText = String((status && status.status) || '').toLowerCase();
+      const links = (status && status.links) || [];
+
+      if (links.length || statusText.includes('ready')) {
+        return status;
+      }
+
+      if (statusText.includes('error') || statusText.includes('fail') || statusText.includes('dead')) {
+        throw new Error(`AllDebrid: magnet ${status.status || 'failed'} (no seeders/dead torrent?)`);
+      }
+
+      if (onProgress) {
+        const pct = status && status.size
+          ? Math.min(100, Math.round(((status.downloaded || 0) / status.size) * 100))
+          : null;
+        onProgress(pct === null ? `Caching on AllDebrid… (${status.status || 'processing'})` : `Caching on AllDebrid… ${pct}%`);
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+
+    throw new Error('Timed out waiting for AllDebrid to cache this magnet (10 min).');
+  }
+
+  // ---- universal magnet-link helper: runs on every page (not just RLSBB), since a magnet
+  // link can turn up anywhere. Deliberately styled with plain inline styles rather than the
+  // RLSBB dark-theme stylesheet, and namespaced classes -- this runs on arbitrary third-party
+  // pages we don't control, so it needs to be robust against unknown host CSS rather than
+  // relying on our own stylesheet always winning (a lesson learned the hard way on RLSBB itself:
+  // even a page we DO fully control had leftover CSS silently hide a button once already). ----
+  function injectMagnetHelperStyles() {
+    if (document.getElementById('rbb-magnet-styles')) return;
+
+    const style = document.createElement('style');
+    style.id = 'rbb-magnet-styles';
+    style.textContent = `
+      .rbb-magnet-group { all: initial !important; display: inline-flex !important; gap: 4px !important; margin-left: 6px !important; vertical-align: middle !important; }
+      .rbb-magnet-btn {
+        all: unset !important;
+        box-sizing: border-box !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        gap: 3px !important;
+        padding: 2px 7px !important;
+        border-radius: 999px !important;
+        font: 11px/1.3 -apple-system, Segoe UI, Roboto, Arial, sans-serif !important;
+        font-weight: 700 !important;
+        cursor: pointer !important;
+        white-space: nowrap !important;
+        border: 1px solid rgba(0,0,0,.25) !important;
+      }
+      .rbb-magnet-btn.rbb-magnet-browser { background: #2e8b6f !important; color: #fff !important; }
+      .rbb-magnet-btn.rbb-magnet-browser:hover { background: #37a683 !important; }
+      .rbb-magnet-btn.rbb-magnet-local { background: #2b6fa4 !important; color: #fff !important; }
+      .rbb-magnet-btn.rbb-magnet-local:hover { background: #3a86c4 !important; }
+      .rbb-magnet-btn:disabled { opacity: .55 !important; cursor: default !important; }
+      .rbb-magnet-status { all: initial !important; font: 11px/1.3 -apple-system, Segoe UI, Roboto, Arial, sans-serif !important; color: #444 !important; margin-left: 6px !important; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function scanForMagnetLinks() {
+    const links = document.querySelectorAll('a[href^="magnet:"]:not([data-rbb-magnet-done])');
+
+    links.forEach(link => {
+      link.dataset.rbbMagnetDone = '1';
+
+      const group = document.createElement('span');
+      group.className = 'rbb-magnet-group';
+      group.innerHTML = `
+        <button type="button" class="rbb-magnet-btn rbb-magnet-browser" title="Cache via AllDebrid, then download in your browser">⬇ AllDebrid</button>
+        <button type="button" class="rbb-magnet-btn rbb-magnet-local" title="Cache via AllDebrid, then send to local aria2 (choose folder)">➟ aria2</button>
+        <span class="rbb-magnet-status" data-magnet-status></span>
+      `;
+
+      link.insertAdjacentElement('afterend', group);
+
+      const suggestedName = cleanText(link.textContent) || (link.href.match(/dn=([^&]+)/) || [])[1] || 'download';
+
+      group.querySelector('.rbb-magnet-browser').addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        handleMagnetButtonClick('browser', link.href, decodeURIComponent(suggestedName), group);
+      });
+      group.querySelector('.rbb-magnet-local').addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        handleMagnetButtonClick('local-aria2', link.href, decodeURIComponent(suggestedName), group);
+      });
+    });
+  }
+
+  async function handleMagnetButtonClick(mode, magnetUri, suggestedName, group) {
+    const status = group.querySelector('[data-magnet-status]');
+    const buttons = group.querySelectorAll('.rbb-magnet-btn');
+
+    let destDir = '';
+    if (mode === 'local-aria2') {
+      const { localAria2Dir } = getDownloadSettings();
+      destDir = window.prompt('Save to folder (on this PC):', localAria2Dir || '/home/Phaderon/Downloads');
+      if (destDir === null) return; // cancelled
+    }
+
+    buttons.forEach(b => { b.disabled = true; });
+    status.textContent = 'Uploading magnet to AllDebrid…';
+
+    try {
+      const uploaded = await allDebridUploadMagnet(magnetUri);
+      log('AllDebrid magnet accepted:', uploaded);
+
+      let ready = uploaded;
+      if (!uploaded.ready && !(uploaded.links && uploaded.links.length)) {
+        ready = await pollMagnetUntilReady(uploaded.id, text => { status.textContent = text; });
+      } else if (!ready.links) {
+        ready = await allDebridMagnetStatus(uploaded.id);
+      }
+
+      const files = ready.links || [];
+      if (!files.length) throw new Error('AllDebrid reported ready but returned no files.');
+
+      // Multi-file torrents (season packs, repacks with extras, etc.) — grab the biggest file,
+      // same "pick the real content" heuristic used elsewhere in this script for archives.
+      const best = files.reduce((a, b) => (Number(b.size || 0) > Number(a.size || 0) ? b : a));
+      const filename = best.filename || suggestedName;
+
+      if (files.length > 1) {
+        status.textContent = `${files.length} files found — using largest (${filename})…`;
+      }
+
+      if (mode === 'browser') {
+        await browserDownload(best.link, filename);
+        status.textContent = 'Download started ✓';
+      } else {
+        await localAria2AddUri(best.link, filename, destDir);
+        status.textContent = `Sent to local aria2 ✓ (${destDir})`;
+      }
+    } catch (error) {
+      logError('Magnet handling failed:', error);
+      status.textContent = error.message || 'Failed';
+      status.style.color = '#c0392b';
+    } finally {
+      buttons.forEach(b => { b.disabled = false; });
+      setTimeout(() => { status.textContent = ''; status.style.color = ''; }, 12000);
+    }
+  }
+
+  function initMagnetLinkHelper() {
+    injectMagnetHelperStyles();
+    scanForMagnetLinks();
+
+    const observer = new MutationObserver(() => scanForMagnetLinks());
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
   // Replaces a release row's action buttons with an unmissable "gone" banner instead of a
   // small line of red status text that's easy to overlook or mistake for a transient error.
   function markReleaseRowDead(button) {
@@ -1974,6 +2266,21 @@
               <span>aria2 RPC secret (optional)</span>
               <input type="password" name="aria2Secret" autocomplete="off" placeholder="leave blank if none">
             </label>
+            <p class="rbb-description" style="max-width:none; margin-top:2px;">
+              Local aria2 (this PC) — used by the magnet-link helper below, so downloads land wherever you choose instead of the NAS's fixed folder.
+            </p>
+            <label class="rbb-settings-field">
+              <span>Local aria2 RPC URL</span>
+              <input type="text" name="localAria2Rpc" autocomplete="off" placeholder="http://127.0.0.1:6802/jsonrpc">
+            </label>
+            <label class="rbb-settings-field">
+              <span>Local aria2 RPC secret</span>
+              <input type="password" name="localAria2Secret" autocomplete="off" placeholder="leave blank if none">
+            </label>
+            <label class="rbb-settings-field">
+              <span>Default local download folder</span>
+              <input type="text" name="localAria2Dir" autocomplete="off" placeholder="/home/Phaderon/Downloads">
+            </label>
             <div class="rbb-settings-actions">
               <span class="rbb-settings-status" data-settings-status></span>
               <button type="submit" class="rbb-rg-action">Save</button>
@@ -1998,6 +2305,9 @@
       setSetting('allDebridKey', form.allDebridKey.value.trim());
       setSetting('aria2Rpc', form.aria2Rpc.value.trim());
       setSetting('aria2Secret', form.aria2Secret.value.trim());
+      setSetting('localAria2Rpc', form.localAria2Rpc.value.trim());
+      setSetting('localAria2Secret', form.localAria2Secret.value.trim());
+      setSetting('localAria2Dir', form.localAria2Dir.value.trim());
 
       const status = dialog.querySelector('[data-settings-status]');
       status.textContent = 'Saved ✓';
@@ -2014,6 +2324,9 @@
     form.allDebridKey.value = settings.allDebridKey;
     form.aria2Rpc.value = settings.aria2Rpc;
     form.aria2Secret.value = settings.aria2Secret;
+    form.localAria2Rpc.value = settings.localAria2Rpc;
+    form.localAria2Secret.value = settings.localAria2Secret;
+    form.localAria2Dir.value = settings.localAria2Dir;
 
     if (!dialog.open) dialog.showModal();
     document.body.style.overflow = 'hidden';
@@ -3512,13 +3825,24 @@
     document.head.appendChild(style);
   }
 
+  const isRlsbbHost = /(^|\.)rlsbb\.in$/i.test(location.hostname);
   const onRapidGator = /(^|\.)rapidgator\.net$/i.test(location.hostname);
   const onProtectedTo = /(^|\.)protected\.to$/i.test(location.hostname);
-  const boot = onRapidGator ? initRapidGatorPage : (onProtectedTo ? initProtectedToPage : init);
+
+  function bootForThisPage() {
+    // The magnet-link helper is universal (runs everywhere the @match covers, i.e. every
+    // site) and independent of which RLSBB-specific flow (if any) also runs on this page.
+    injectSettingsDialog();
+    initMagnetLinkHelper();
+
+    if (onRapidGator) initRapidGatorPage();
+    else if (onProtectedTo) initProtectedToPage();
+    else if (isRlsbbHost) init();
+  }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot);
+    document.addEventListener('DOMContentLoaded', bootForThisPage);
   } else {
-    boot();
+    bootForThisPage();
   }
 })();
