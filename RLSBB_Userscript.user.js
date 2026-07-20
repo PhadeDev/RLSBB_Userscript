@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.1.1
+// @version      2.1.2
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -961,8 +961,12 @@
       if (paragraphHasRgLink) {
         pendingReleaseName = '';
       } else {
+        // Only overwrite pendingReleaseName when this paragraph actually names a release --
+        // some posts have an unrelated paragraph (e.g. "Links: iMDB | Trailer | NFO") sitting
+        // between the "Release Name:" paragraph and the "Download:" paragraph that needs it;
+        // wiping the name here on no-match dropped that release entirely.
         const nameMatch = p.textContent.match(/release\s*name\s*:\s*([^]*?)(?=size\s*:|links\s*:|download\s*:|$)/i);
-        pendingReleaseName = nameMatch ? cleanReleaseName(cleanText(nameMatch[1])) : '';
+        if (nameMatch) pendingReleaseName = cleanReleaseName(cleanText(nameMatch[1]));
       }
     }
 
