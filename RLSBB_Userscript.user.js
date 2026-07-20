@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.1.3
+// @version      2.2.0
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -567,39 +567,30 @@
     `;
   }
 
-  function appendArticle(article, grid, doc = document) {
-    const data = extractArticle(article, doc);
-
-    if (!data.id || seenIds.has(data.id)) return;
-    seenIds.add(data.id);
-
-    const card = document.createElement('article');
-    card.className = isPostPage ? 'rbb-card rbb-detail-card' : 'rbb-card';
-
-    card.dataset.id = data.id;
-    card.dataset.title = data.title.toLowerCase();
-    card.dataset.text = data.fullText.toLowerCase();
-    card.dataset.categories = data.categories.join(' ').toLowerCase();
-    card.dataset.hasRg = data.rgLinks.length ? '1' : '0';
-    card.dataset.timestamp = data.timestamp ? String(data.timestamp) : '0';
-
+  // Builds the card's inner HTML for either context: the compact feed-grid card (detail=false)
+  // or the full detail view -- the actual post page, and (via openLightbox) the lightbox modal
+  // triggered from a feed card (detail=true either way). `includeCommentsFooter` is kept
+  // separate from `detail` because the lightbox gets the full plot/ratings/release detail but
+  // has no live comments DOM to show (that only exists on the real post page itself).
+  function buildCardInnerHtml(data, detail, includeCommentsFooter) {
     const bestRelease = chooseBestRelease(data.releases);
     const otherReleases = data.releases.filter(r => r !== bestRelease);
 
     const bestRow = bestRelease
-      ? makeReleaseRow(bestRelease, true)
+      ? makeReleaseRow(bestRelease, true, detail)
       : `<p class="rbb-muted">No RapidGator versions found.</p>`;
 
     const allRows = otherReleases.length
-      ? otherReleases.map(release => makeReleaseRow(release, false)).join('')
+      ? otherReleases.map(release => makeReleaseRow(release, false, detail)).join('')
       : '';
 
     // Feed-grid cards stay to a single "best" release row -- switching quality is a click
     // away via the lightbox/post page, so listing every other version here was pure clutter.
-    // Post pages keep the full list open since that's the actual detail view.
-    const showAll = (isPostPage && otherReleases.length)
+    // The detail view lists every other version too, but collapsed by default -- not worth
+    // auto-expanding a 5-10 release wall of text before anyone's asked for it.
+    const showAll = (detail && otherReleases.length)
       ? `
-        <details class="rbb-all-versions" open>
+        <details class="rbb-all-versions">
           <summary>All other versions (${data.releases.length})</summary>
           <div class="rbb-all-version-list">
             ${allRows}
@@ -608,7 +599,7 @@
       `
       : '';
 
-    card.innerHTML = `
+    return `
       <a class="rbb-image" href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">
         ${data.image ? `<img src="${escAttr(data.image)}" alt="">` : `<div class="rbb-no-image">No image</div>`}
       </a>
@@ -633,7 +624,7 @@
           ${data.cardBadges.map(chipHtml).join('')}
         </div>
 
-        ${data.description ? `<p class="rbb-description">${esc(data.description)}</p>` : ''}
+        ${detail ? makePostMetaHtml(data) : (data.description ? `<p class="rbb-description">${esc(data.description)}</p>` : '')}
 
         <section class="rbb-release-list">
           <div class="rbb-release-heading">
@@ -644,7 +635,7 @@
           ${showAll}
         </section>
 
-        ${isPostPage ? `
+        ${includeCommentsFooter ? `
         <details class="rbb-comments" data-comments-url="${escAttr(data.commentsUrl || data.url + '#comments')}" open>
           <summary>${esc(data.commentsText || 'Comments')}</summary>
           <div class="rbb-comments-body">Loading original comments…</div>
@@ -658,6 +649,25 @@
 
       <div class="rbb-extension-bridge" aria-hidden="true"></div>
     `;
+  }
+
+  function appendArticle(article, grid, doc = document) {
+    const data = extractArticle(article, doc);
+
+    if (!data.id || seenIds.has(data.id)) return;
+    seenIds.add(data.id);
+
+    const card = document.createElement('article');
+    card.className = isPostPage ? 'rbb-card rbb-detail-card' : 'rbb-card';
+
+    card.dataset.id = data.id;
+    card.dataset.title = data.title.toLowerCase();
+    card.dataset.text = data.fullText.toLowerCase();
+    card.dataset.categories = data.categories.join(' ').toLowerCase();
+    card.dataset.hasRg = data.rgLinks.length ? '1' : '0';
+    card.dataset.timestamp = data.timestamp ? String(data.timestamp) : '0';
+
+    card.innerHTML = buildCardInnerHtml(data, isPostPage, isPostPage);
 
     const bridge = card.querySelector('.rbb-extension-bridge');
 
@@ -701,14 +711,14 @@
         const link = event.target.closest('a');
         if (link) event.preventDefault();
 
-        openLightbox(card, data);
+        openLightbox(data);
       });
     }
 
     grid.appendChild(card);
   }
 
-  function makeReleaseRow(release, isBest) {
+  function makeReleaseRow(release, isBest, detailMode = false) {
     const primaryQuality = release.primaryQuality || 'Release';
 
     // The quality label already shows this prominently on its own -- repeating it as a small
@@ -746,8 +756,11 @@
       `;
     }
 
-    const extras = release.extraLinks.length
-      ? release.extraLinks.slice(0, 2).map(link => `
+    // Feed cards only have room for a couple of icons; the detail view (post page/lightbox)
+    // has the space to show every screenshot/NFO/subtitle link the post actually had.
+    const shownExtraLinks = detailMode ? release.extraLinks : release.extraLinks.slice(0, 2);
+    const extras = shownExtraLinks.length
+      ? shownExtraLinks.map(link => `
         <a class="rbb-mini-extra" href="${escAttr(link.href)}" target="_blank" rel="noopener noreferrer" title="${escAttr(link.label)}">
           ${esc(shortExtraLabel(link.label))}
         </a>
@@ -769,7 +782,9 @@
             <div class="rbb-release-meta">
               ${release.format ? `<span>${esc(release.format)}</span>` : ''}
               ${release.audio ? `<span>${esc(release.audio)}</span>` : ''}
+              ${detailMode && release.runtime ? `<span>${esc(release.runtime)}</span>` : ''}
             </div>
+            ${detailMode && release.subtitles ? `<div class="rbb-release-subtitles">Subtitles: ${esc(release.subtitles)}</div>` : ''}
             ${chips ? `<div class="rbb-release-badges">${chips}</div>` : ''}
           </div>
         </div>
@@ -781,6 +796,38 @@
           <span class="rbb-dl-progress" data-dl-progress></span>
         </div>
       </div>
+    `;
+  }
+
+  // Plot/genre/ratings/cast block for the detail view (post page + lightbox) -- the compact
+  // feed card never shows this, only its title/badges/best-release stay visible there.
+  function makePostMetaHtml(data) {
+    const ratingRows = [
+      ['IMDB', data.ratingImdb],
+      ['TMDB', data.ratingTmdb],
+      ['Rotten Tomatoes', data.ratingRotten],
+      ['Metacritic', data.ratingMetacritic]
+    ].filter(([, value]) => value && value.toUpperCase() !== 'N/A');
+
+    const hasAnything = data.plot || data.genre || data.director || data.cast || ratingRows.length;
+    if (!hasAnything) return '';
+
+    return `
+      <section class="rbb-post-meta">
+        ${data.plot ? `<p class="rbb-post-plot">${esc(data.plot)}</p>` : ''}
+        ${ratingRows.length ? `
+          <div class="rbb-rating-row">
+            ${ratingRows.map(([label, value]) => `
+              <div class="rbb-rating-pill"><span class="rbb-rating-label">${esc(label)}</span><span class="rbb-rating-value">${esc(value)}</span></div>
+            `).join('')}
+          </div>
+        ` : ''}
+        <div class="rbb-post-facts">
+          ${data.genre ? `<div><strong>Genre:</strong> ${esc(data.genre)}</div>` : ''}
+          ${data.director ? `<div><strong>Director:</strong> ${esc(data.director)}</div>` : ''}
+          ${data.cast ? `<div><strong>Starring:</strong> ${esc(data.cast)}</div>` : ''}
+        </div>
+      </section>
     `;
   }
 
@@ -881,7 +928,8 @@
     const postedDate = parsePostedDate(postedAbsolute);
 
     const readableText = getReadableText(content);
-    const description = extractDescription(content);
+    const postMeta = extractPostMeta(content);
+    const description = postMeta.plot || extractDescription(content);
     const cardBadges = detectBadges(title + ' ' + readableText);
 
     return {
@@ -902,9 +950,56 @@
       commentRgLinks,
       releases,
       description,
+      ...postMeta,
       cardBadges,
       fullText: article.textContent || ''
     };
+  }
+
+  // Pulls the post-wide "Plot: ... / Genre: ... IMDB Rating: ... TMDB Rating: ... Rotten
+  // Rating: ... Metacritic Rating: ... Directed by: ... Starring: ..." paragraphs -- shown once
+  // per post (not per release) in the detail view/lightbox, which previously discarded all of
+  // this in favour of a single generic "description" snippet.
+  function extractPostMeta(content) {
+    const paragraphs = [...content.querySelectorAll('p')];
+
+    let plot = '';
+    let genre = '';
+    let ratingImdb = '';
+    let ratingTmdb = '';
+    let ratingRotten = '';
+    let ratingMetacritic = '';
+    let director = '';
+    let cast = '';
+
+    for (const p of paragraphs) {
+      if (!plot) {
+        const plotMatch = (p.textContent || '').match(/^\s*plot\s*:\s*([^]*)$/i);
+        if (plotMatch) plot = cleanText(plotMatch[1]);
+      }
+
+      if (!genre && /genre\s*:/i.test(p.textContent || '') && /directed by\s*:|starring\s*:/i.test(p.textContent || '')) {
+        // the IMDb rating widget injects a <script> right into this paragraph -- strip it
+        // before reading textContent so its JS source doesn't leak into the extracted text
+        const clone = p.cloneNode(true);
+        clone.querySelectorAll('script, style').forEach(n => n.remove());
+        const text = cleanText(clone.textContent || '');
+
+        // "imdb rating live:" must be checked before the plain "imdb rating:" alternative --
+        // it appears first in the source and has no visible value (the widget markup was
+        // stripped), so without it here the boundary match skips straight to the real "IMDB
+        // Rating:" line and swallows "IMDB Rating Live:" into the captured genre text instead.
+        genre = cleanText((text.match(/genre\s*:\s*([^]*?)(?=imdb rating live\s*:|imdb rating\s*:|tmdb rating\s*:|rotten rating\s*:|metacritic rating\s*:|directed by\s*:|starring\s*:|$)/i) || [])[1] || '');
+        ratingImdb = cleanText((text.match(/imdb rating\s*:\s*([^]*?)(?=tmdb rating\s*:|rotten rating\s*:|metacritic rating\s*:|directed by\s*:|starring\s*:|$)/i) || [])[1] || '');
+        ratingTmdb = cleanText((text.match(/tmdb rating\s*:\s*([^]*?)(?=rotten rating\s*:|metacritic rating\s*:|directed by\s*:|starring\s*:|$)/i) || [])[1] || '');
+        ratingRotten = cleanText((text.match(/rotten rating\s*:\s*([^]*?)(?=metacritic rating\s*:|directed by\s*:|starring\s*:|$)/i) || [])[1] || '');
+        ratingMetacritic = cleanText((text.match(/metacritic rating\s*:\s*([^]*?)(?=directed by\s*:|starring\s*:|$)/i) || [])[1] || '');
+        director = cleanText((text.match(/directed by\s*:\s*([^]*?)(?=starring\s*:|$)/i) || [])[1] || '');
+        cast = cleanText((text.match(/starring\s*:\s*([^]*)$/i) || [])[1] || '');
+      }
+    }
+
+    return { plot, genre, ratingImdb, ratingTmdb, ratingRotten, ratingMetacritic, director, cast };
   }
 
   function extractReleases(content) {
@@ -916,6 +1011,13 @@
     // no name. Carry the name forward one paragraph so the Download-only segment isn't
     // rejected for having "Download" as its derived name.
     let pendingReleaseName = '';
+    // The Size/Video/Audio/Runtime/Subtitles line, and the Samples/NFO extra links, almost
+    // always live in that same earlier "Release Name:" paragraph too -- not the bare
+    // "Download: NiTROFLARE – RAPiDGATOR" paragraph that actually carries the RG link. Without
+    // carrying these forward the same way as the name, releases always show "size unknown"
+    // and lose their screenshot/NFO/subtitle links entirely.
+    let pendingReleaseInfo = null;
+    let pendingExtraLinks = [];
 
     for (const p of paragraphs) {
       const segments = segmentParagraphIntoReleases(p);
@@ -937,7 +1039,15 @@
           continue;
         }
 
-        const info = extractReleaseInfo(segment.text);
+        // The "Download:" segment's own text rarely repeats size/format/audio -- fall back to
+        // whatever the carried-forward info paragraph had.
+        const segmentInfo = extractReleaseInfo(segment.text);
+        const info = {
+          format: segmentInfo.format || pendingReleaseInfo?.format || '',
+          audio: segmentInfo.audio || pendingReleaseInfo?.audio || '',
+          size: segmentInfo.size || pendingReleaseInfo?.size || ''
+        };
+
         const badges = detectBadges(`${releaseName} ${segment.text}`);
         const tokens = badgesToTokens(badges, `${releaseName} ${segment.text}`);
         const primaryQuality = getPrimaryQuality(badges, releaseName);
@@ -953,15 +1063,18 @@
           isProtected: /protected\.to/i.test(a.href)
         }));
 
-        const extraLinks = segment.anchors
-          .filter(isUsefulSmallExtraLink)
-          .map(anchorToExtra);
+        const extraLinks = dedupeLinks([
+          ...pendingExtraLinks,
+          ...segment.anchors.filter(isUsefulSmallExtraLink).map(anchorToExtra)
+        ]);
 
         releases.push({
           name: releaseName || 'Release',
           format: info.format,
           audio: info.audio,
           size: info.size,
+          runtime: pendingReleaseInfo?.runtime || '',
+          subtitles: pendingReleaseInfo?.subtitles || '',
           badges,
           tokens,
           primaryQuality,
@@ -972,17 +1085,51 @@
 
       if (paragraphHasRgLink) {
         pendingReleaseName = '';
+        pendingReleaseInfo = null;
+        pendingExtraLinks = [];
       } else {
         // Only overwrite pendingReleaseName when this paragraph actually names a release --
         // some posts have an unrelated paragraph (e.g. "Links: iMDB | Trailer | NFO") sitting
         // between the "Release Name:" paragraph and the "Download:" paragraph that needs it;
         // wiping the name here on no-match dropped that release entirely.
         const nameMatch = p.textContent.match(/release\s*name\s*:\s*([^]*?)(?=size\s*:|links\s*:|download\s*:|$)/i);
-        if (nameMatch) pendingReleaseName = cleanReleaseName(cleanText(nameMatch[1]));
+        const extras = [...p.querySelectorAll('a[href]')].filter(isUsefulSmallExtraLink).map(anchorToExtra);
+
+        if (nameMatch) {
+          pendingReleaseName = cleanReleaseName(cleanText(nameMatch[1]));
+          pendingReleaseInfo = extractPendingReleaseInfo(p);
+          pendingExtraLinks = extras;
+        } else if (extras.length) {
+          pendingExtraLinks = dedupeLinks([...pendingExtraLinks, ...extras]);
+        }
       }
     }
 
     return mergeDuplicateReleases(releases);
+  }
+
+  // Parses the Size/Video/Audio/Runtime/Subtitles lines out of a "Release Name:" info
+  // paragraph -- everything after Release Name/Size that extractReleaseInfo (which only ever
+  // sees the separate "Download:" segment's text) can't reach.
+  function extractPendingReleaseInfo(p) {
+    const text = cleanText(p.textContent || '');
+
+    const sizeMatch = text.match(/size\s*:\s*([^]*?)(?=\s*video\s*:|\s*audio|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|$)/i);
+    const videoMatch = text.match(/video\s*:\s*([^]*?)(?=\s*audio|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|$)/i);
+    const audioMatch = text.match(/audio(?:\s*\d*\s*#?)?\s*:\s*([^]*?)(?=\s*audio\s*\d|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|$)/i);
+    const runtimeMatch = text.match(/runtime\s*:\s*([^]*?)(?=\s*subtitles\s*:|\s*samples\s*:|$)/i);
+    const subtitlesMatch = text.match(/subtitles\s*:\s*([^]*?)(?=\s*samples\s*:|$)/i);
+
+    const videoLine = videoMatch ? cleanText(videoMatch[1]) : '';
+    const formatMatch = videoLine.match(/\b(MKV|MP4|AVI|RAR|ISO)\b/i);
+
+    return {
+      size: sizeMatch ? cleanText(sizeMatch[1]) : '',
+      format: formatMatch ? formatMatch[1].toUpperCase() : '',
+      audio: audioMatch ? cleanText(audioMatch[1]) : '',
+      runtime: runtimeMatch ? cleanText(runtimeMatch[1]) : '',
+      subtitles: subtitlesMatch ? cleanText(subtitlesMatch[1]).replace(/\s*or\s*\([^)]*\)\s*$/i, '') : ''
+    };
   }
 
   function segmentParagraphIntoReleases(p) {
@@ -1184,7 +1331,10 @@
   function autoExpandPostPageSections() {
     if (!isPostPage) return;
 
-    document.querySelectorAll('.rbb-comment-rg, .rbb-comments, .rbb-all-versions').forEach(details => {
+    // "All other versions" stays collapsed by default even on the real post page -- with
+    // 5-10 releases that's a wall of near-duplicate rows nobody wants open by default; a click
+    // away is enough.
+    document.querySelectorAll('.rbb-comment-rg, .rbb-comments').forEach(details => {
       details.open = true;
       details.classList.add('rbb-force-open');
     });
@@ -2439,29 +2589,26 @@
     dialog.addEventListener('close', () => { document.body.style.overflow = ''; });
   }
 
-  function openLightbox(sourceCard, data) {
+  function openLightbox(data) {
     const dialog = document.getElementById('rbb-lightbox-dialog');
     if (!dialog) return;
 
     const body = dialog.querySelector('.rbb-lightbox-body');
-    const clone = sourceCard.cloneNode(true);
-    clone.classList.add('rbb-detail-card');
 
-    clone.querySelectorAll('.rbb-comments, .rbb-all-versions').forEach(details => {
-      details.open = true;
-      details.classList.add('rbb-force-open');
-    });
+    // Built fresh from `data` (the same fully-extracted article the compact feed card came
+    // from) rather than cloning the feed card's DOM -- the feed card only ever renders the
+    // compact view, so cloning it could never show the plot/ratings/full release list this is
+    // meant to have. Download buttons/category pills work immediately since those are bound
+    // via document-level delegation (bindDownloadButtons/bindCategoryPills), not per-element.
+    const wrapper = document.createElement('article');
+    wrapper.className = 'rbb-card rbb-detail-card';
+    wrapper.innerHTML = buildCardInnerHtml(data, true, false);
 
     body.innerHTML = '';
-    body.appendChild(clone);
+    body.appendChild(wrapper);
     dialog.scrollTop = 0;
     if (!dialog.open) dialog.showModal();
     document.body.style.overflow = 'hidden';
-
-    // cloning drops listeners, so kick off the comment fetch directly rather than
-    // waiting for a toggle event that will never fire on this detached <details>
-    const commentsDetails = clone.querySelector('.rbb-comments');
-    if (commentsDetails) loadComments(commentsDetails);
   }
 
   function closeLightbox() {
@@ -3081,7 +3228,11 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
         gap: 12px;
-        align-items: start;
+        align-items: stretch;
+      }
+
+      .rbb-card > .rbb-content {
+        flex: 1;
       }
 
       /* post detail pages only ever hold a single card - the dense auto-fill
@@ -3171,6 +3322,13 @@
         background: linear-gradient(155deg, rgba(255,255,255,.074), rgba(255,255,255,.028));
         backdrop-filter: blur(18px);
         box-shadow: 0 12px 34px rgba(0,0,0,.30);
+        /* .rbb-grid stretches every card in a row to match the tallest one (align-items:
+           stretch) -- the card itself has to actually fill that height, rather than
+           shrink-wrap its content, so leftover space becomes blank space at the bottom of
+           shorter cards instead of every card being its own random height. */
+        height: 100%;
+        display: flex;
+        flex-direction: column;
       }
 
       .rbb-card[hidden],
@@ -3380,6 +3538,71 @@
         -webkit-line-clamp: initial;
         overflow: visible;
         max-width: 65ch;
+      }
+
+      .rbb-post-meta {
+        margin: 8px 0 12px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        background: rgba(0,0,0,.16);
+        border: 1px solid rgba(255,255,255,.06);
+      }
+
+      .rbb-post-plot {
+        color: #dce7f2;
+        font-size: 13px;
+        line-height: 1.55;
+        margin: 0 0 12px;
+        max-width: 70ch;
+      }
+
+      .rbb-rating-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .rbb-rating-pill {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        padding: 6px 12px;
+        border-radius: 10px;
+        background: rgba(255,255,255,.05);
+        border: 1px solid rgba(255,255,255,.08);
+        min-width: 84px;
+      }
+
+      .rbb-rating-label {
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: .03em;
+        text-transform: uppercase;
+        color: var(--rbb-faint);
+      }
+
+      .rbb-rating-value {
+        font-size: 13px;
+        font-weight: 850;
+        color: #f7dca3;
+      }
+
+      .rbb-post-facts {
+        display: grid;
+        gap: 6px;
+        font-size: 12px;
+        color: #c3d1dc;
+        line-height: 1.5;
+      }
+
+      .rbb-post-facts strong { color: #edf4fb; }
+
+      .rbb-release-subtitles {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--rbb-muted);
       }
 
       .rbb-release-list {
@@ -3642,8 +3865,8 @@
       .rbb-dl-aria2:hover { background: rgba(45,105,175,.42); }
 
       .rbb-dl-protected {
-        background: linear-gradient(135deg, #c89532, #ffe09a);
-        color: #211603;
+        background: linear-gradient(135deg, #c89532, #ffe09a) !important;
+        color: #211603 !important;
         text-decoration: none;
       }
       .rbb-dl-protected:hover { filter: brightness(1.08); }
