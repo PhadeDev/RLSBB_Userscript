@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.1.2
+// @version      2.1.3
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -594,10 +594,13 @@
       ? otherReleases.map(release => makeReleaseRow(release, false)).join('')
       : '';
 
-    const showAll = otherReleases.length
+    // Feed-grid cards stay to a single "best" release row -- switching quality is a click
+    // away via the lightbox/post page, so listing every other version here was pure clutter.
+    // Post pages keep the full list open since that's the actual detail view.
+    const showAll = (isPostPage && otherReleases.length)
       ? `
-        <details class="rbb-all-versions" ${isPostPage ? 'open' : ''}>
-          <summary>${isPostPage ? 'All other versions' : 'Show all versions'} (${data.releases.length})</summary>
+        <details class="rbb-all-versions" open>
+          <summary>All other versions (${data.releases.length})</summary>
           <div class="rbb-all-version-list">
             ${allRows}
           </div>
@@ -641,15 +644,16 @@
           ${showAll}
         </section>
 
-        <details class="rbb-comments" data-comments-url="${escAttr(data.commentsUrl || data.url + '#comments')}" ${isPostPage ? 'open' : ''}>
+        ${isPostPage ? `
+        <details class="rbb-comments" data-comments-url="${escAttr(data.commentsUrl || data.url + '#comments')}" open>
           <summary>${esc(data.commentsText || 'Comments')}</summary>
-          <div class="rbb-comments-body">${isPostPage ? 'Loading original comments…' : 'Open to load comments…'}</div>
+          <div class="rbb-comments-body">Loading original comments…</div>
         </details>
 
         <footer class="rbb-footer">
-          ${isPostPage ? `<span>${data.tag ? esc(data.tag) : ''}</span>` : `<a class="rbb-open-post-link" href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">Open post</a>`}
-          ${!isPostPage && data.tag ? `<span>${esc(data.tag)}</span>` : ''}
+          <span>${data.tag ? esc(data.tag) : ''}</span>
         </footer>
+        ` : ''}
       </div>
 
       <div class="rbb-extension-bridge" aria-hidden="true"></div>
@@ -687,10 +691,10 @@
       card.classList.add('rbb-card-clickable');
       card.addEventListener('click', event => {
         // Let native <details> toggles and explicit "escape" actions (download buttons,
-        // NFO/screenshot extras, comment-RG links, and the footer's "Open post" link) behave
-        // normally. Everything else — including the image and title <a> tags, which have real
-        // hrefs to the post — should open the lightbox instead of navigating away.
-        if (event.target.closest('summary, button, .rbb-mini-extra, .rbb-comment-rg-link, .rbb-open-post-link, .rbb-dl-protected')) {
+        // NFO/screenshot extras) behave normally. Everything else — including the image and
+        // title <a> tags, which have real hrefs to the post — should open the lightbox instead
+        // of navigating away.
+        if (event.target.closest('summary, button, .rbb-mini-extra, .rbb-dl-protected')) {
           return;
         }
 
@@ -705,7 +709,14 @@
   }
 
   function makeReleaseRow(release, isBest) {
-    const chips = release.badges.map(chipHtml).join('');
+    const primaryQuality = release.primaryQuality || 'Release';
+
+    // The quality label already shows this prominently on its own -- repeating it as a small
+    // badge too (e.g. "4K" pill next to a "4K" chip) was just visual noise.
+    const chips = release.badges
+      .filter(badge => chipKey(badge) !== chipKey(primaryQuality))
+      .map(chipHtml)
+      .join('');
 
     // AllDebrid unlocks whichever RapidGator link is first on the row — no need to also show
     // the raw RapidGator/Backup links, or a separate button per mirror; the download buttons
@@ -744,22 +755,23 @@
       : '';
 
     const tokens = release.tokens.join(' ');
-    const primaryQuality = release.primaryQuality || 'Release';
 
     return `
       <div class="rbb-release-row ${isBest ? 'rbb-best-row' : ''}" data-version-tokens="${escAttr(tokens)}">
-        <div class="rbb-quality-block">
-          <div class="rbb-quality-label rbb-quality-${escAttr(chipKey(primaryQuality))}">${esc(primaryQuality)}</div>
-          <div class="rbb-size-badge">${esc(release.size || 'size unknown')}</div>
-        </div>
-
-        <div class="rbb-release-main">
-          <div class="rbb-release-name">${esc(release.name || 'Unknown release')}</div>
-          <div class="rbb-release-meta">
-            ${release.format ? `<span>${esc(release.format)}</span>` : ''}
-            ${release.audio ? `<span>${esc(release.audio)}</span>` : ''}
+        <div class="rbb-release-top">
+          <div class="rbb-quality-block">
+            <div class="rbb-quality-label rbb-quality-${escAttr(chipKey(primaryQuality))}">${esc(primaryQuality)}</div>
+            <div class="rbb-size-badge">${esc(release.size || 'size unknown')}</div>
           </div>
-          <div class="rbb-release-badges">${chips}</div>
+
+          <div class="rbb-release-main">
+            <div class="rbb-release-name">${esc(release.name || 'Unknown release')}</div>
+            <div class="rbb-release-meta">
+              ${release.format ? `<span>${esc(release.format)}</span>` : ''}
+              ${release.audio ? `<span>${esc(release.audio)}</span>` : ''}
+            </div>
+            ${chips ? `<div class="rbb-release-badges">${chips}</div>` : ''}
+          </div>
         </div>
 
         <div class="rbb-release-actions">
@@ -3397,20 +3409,18 @@
       }
 
       .rbb-release-row {
-        display: grid;
-        grid-template-columns: 64px minmax(0, 1fr) 78px;
-        gap: 8px;
-        align-items: center;
-        padding: 8px;
-        border-radius: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+        border-radius: 14px;
         background: rgba(0,0,0,.18);
         border: 1px solid rgba(255,255,255,.07);
       }
 
       .rbb-detail-card .rbb-release-row {
-        grid-template-columns: 116px minmax(0, 1fr) 128px;
-        gap: 12px;
-        padding: 12px;
+        gap: 14px;
+        padding: 16px;
         border-radius: 16px;
       }
 
@@ -3419,12 +3429,28 @@
         border-color: rgba(214,166,76,.25);
       }
 
-      .rbb-quality-block {
-        display: grid;
-        gap: 4px;
+      .rbb-release-top {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
       }
 
-      .rbb-detail-card .rbb-quality-block { gap: 7px; }
+      .rbb-detail-card .rbb-release-top { gap: 16px; }
+
+      .rbb-quality-block {
+        flex: 0 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        min-width: 60px;
+      }
+
+      .rbb-detail-card .rbb-quality-block { gap: 7px; min-width: 76px; }
+
+      .rbb-release-main {
+        flex: 1;
+        min-width: 0;
+      }
 
       .rbb-quality-label {
         width: fit-content;
@@ -3524,13 +3550,22 @@
         display: flex;
         flex-direction: column;
         align-items: stretch;
-        gap: 6px;
+        gap: 8px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255,255,255,.07);
       }
+
+      .rbb-detail-card .rbb-release-actions { padding-top: 12px; gap: 10px; }
 
       .rbb-release-rg {
         display: flex;
-        flex-direction: column;
-        gap: 5px;
+        flex-direction: row;
+        gap: 10px;
+      }
+
+      .rbb-release-rg .rbb-dl-btn,
+      .rbb-release-rg .rbb-dl-protected {
+        flex: 1;
       }
 
       .rbb-rg-action {
@@ -3576,29 +3611,29 @@
         all: unset;
         box-sizing: border-box;
         display: flex;
-        flex-direction: column;
+        flex-direction: row;
         align-items: center;
         justify-content: center;
-        gap: 2px;
+        gap: 7px;
         width: 100%;
-        min-height: 34px;
-        padding: 4px 2px;
-        border-radius: 8px;
+        min-height: 38px;
+        padding: 9px 12px;
+        border-radius: 10px;
         border: 1px solid rgba(255,255,255,.14);
         font-weight: 850;
         font-family: inherit;
         cursor: pointer;
         line-height: 1.15;
-        white-space: normal;
+        white-space: nowrap;
         text-align: center;
       }
 
-      .rbb-dl-icon { font-size: 12px; }
-      .rbb-dl-label { font-size: 9px; }
+      .rbb-dl-icon { font-size: 14px; }
+      .rbb-dl-label { font-size: 12px; }
 
-      .rbb-detail-card .rbb-dl-btn { flex-direction: row; min-height: 32px; padding: 6px 8px; gap: 5px; }
-      .rbb-detail-card .rbb-dl-icon { font-size: 13px; }
-      .rbb-detail-card .rbb-dl-label { font-size: 11px; white-space: nowrap; }
+      .rbb-detail-card .rbb-dl-btn { min-height: 42px; padding: 10px 14px; gap: 8px; }
+      .rbb-detail-card .rbb-dl-icon { font-size: 16px; }
+      .rbb-detail-card .rbb-dl-label { font-size: 13px; }
 
       .rbb-dl-browser { background: rgba(77,157,130,.28); color: #b6f2dc; }
       .rbb-dl-browser:hover { background: rgba(77,157,130,.42); }
@@ -3606,8 +3641,12 @@
       .rbb-dl-aria2 { background: rgba(45,105,175,.28); color: #cfe6ff; }
       .rbb-dl-aria2:hover { background: rgba(45,105,175,.42); }
 
-      .rbb-dl-protected { background: rgba(214,166,76,.24); color: #f7dca3; text-decoration: none; }
-      .rbb-dl-protected:hover { background: rgba(214,166,76,.38); }
+      .rbb-dl-protected {
+        background: linear-gradient(135deg, #c89532, #ffe09a);
+        color: #211603;
+        text-decoration: none;
+      }
+      .rbb-dl-protected:hover { filter: brightness(1.08); }
 
       .rbb-dl-btn:disabled { opacity: .55; cursor: default; }
 
@@ -4079,16 +4118,8 @@
           grid-template-columns: 1fr;
         }
 
-        .rbb-release-row {
-          grid-template-columns: 1fr;
-        }
-
-        .rbb-release-actions {
-          align-items: flex-start;
-        }
-
         .rbb-release-rg {
-          justify-content: flex-start;
+          flex-direction: column;
         }
       }
     `;
