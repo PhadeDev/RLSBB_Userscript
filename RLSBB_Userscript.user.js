@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.3.0
+// @version      2.3.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -3629,7 +3629,10 @@
         transform: translateY(-1px);
       }
 
-      .rbb-trailer-pill {
+      .rbb-trailer-pill,
+      .rbb-trailer-pill:visited,
+      .rbb-trailer-pill:hover,
+      .rbb-trailer-pill:active {
         display: flex;
         align-items: center;
         gap: 6px;
@@ -3637,11 +3640,11 @@
         border-radius: 10px;
         background: linear-gradient(135deg, #b91c1c, #ef4444);
         border: 1px solid rgba(255,255,255,.1);
-        color: #fff;
+        color: #fff !important;
         font-size: 12px;
         font-weight: 900;
         letter-spacing: .02em;
-        text-decoration: none;
+        text-decoration: none !important;
         text-transform: uppercase;
         cursor: pointer;
         transition: filter .12s ease, transform .12s ease;
