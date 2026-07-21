@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.2.0
+// @version      2.2.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -404,13 +404,13 @@
   function makeShell() {
     return `
       <header class="rbb-topbar">
-        <div class="rbb-brand">
+        <a class="rbb-brand" href="https://rlsbb.in/" title="Back to the RLSBB homepage">
           <div class="rbb-logo">RBB</div>
           <div>
             <div class="rbb-title">ReleaseBB</div>
             <div class="rbb-subtitle">${isPostPage ? 'detail picker' : 'release picker'} &middot; v${escAttr(scriptVersion())}</div>
           </div>
-        </div>
+        </a>
 
         <div class="rbb-search" data-search></div>
 
@@ -3001,6 +3001,15 @@
         align-items: center;
         gap: 9px;
         padding: 7px 10px;
+        color: inherit;
+        text-decoration: none;
+        cursor: pointer;
+        transition: border-color .12s ease, filter .12s ease;
+      }
+
+      .rbb-brand:hover {
+        filter: brightness(1.12);
+        border-color: rgba(214,166,76,.35);
       }
 
       .rbb-logo {
@@ -3819,6 +3828,9 @@
 
       .rbb-settings-btn {
         height: 48px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         border-radius: 14px;
         border: 1px solid var(--rbb-border);
         background: linear-gradient(145deg, rgba(255,255,255,.07), rgba(255,255,255,.028));
