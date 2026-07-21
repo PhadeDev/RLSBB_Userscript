@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.3.1
+// @version      2.4.0
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -622,7 +622,10 @@
 
         <div class="rbb-badges">
           ${data.cardBadges.map(chipHtml).join('')}
+          ${data.notice && !detail ? `<span class="rbb-notice-pill" title="${escAttr(data.notice)}">&#9888; Note</span>` : ''}
         </div>
+
+        ${detail && data.notice ? `<div class="rbb-notice-card">&#9888; ${esc(data.notice)}</div>` : ''}
 
         ${detail ? makePostMetaHtml(data) : (data.description ? `<p class="rbb-description">${esc(data.description)}</p>` : '')}
 
@@ -934,6 +937,7 @@
     const readableText = getReadableText(content);
     const postMeta = extractPostMeta(content);
     const description = postMeta.plot || extractDescription(content);
+    const notice = extractPostNotice(content);
     const cardBadges = detectBadges(title + ' ' + readableText);
 
     return {
@@ -955,6 +959,7 @@
       releases,
       description,
       ...postMeta,
+      notice,
       cardBadges,
       fullText: article.textContent || ''
     };
@@ -1019,6 +1024,33 @@
     }
 
     return { plot, genre, ratingImdb, ratingTmdb, ratingRotten, ratingMetacritic, director, cast, imdbUrl, trailerUrl };
+  }
+
+  // Some posts drop a short red-text "Please be advised..."/"Note: ..." callout in its own
+  // paragraph, usually right under the cover image and before Plot -- e.g. warning of cut/
+  // watermarked ads, or noting a release is clean. Only some releases have one at all, and the
+  // wording varies, so this can't match on fixed phrases -- instead it looks for a standalone
+  // paragraph that (a) isn't one of the known labelled release/meta lines and (b) has a
+  // meaningfully long chunk of its text in red (color: red / #ff0000), which single coloured
+  // words elsewhere (e.g. "German" in an Audio line, "Selectable" in Subtitles) don't reach.
+  function extractPostNotice(content) {
+    const labelPattern = /plot\s*:|genre\s*:|release\s*name\s*:|size\s*:|video\s*:|audio(\s*\d*\s*#?)?\s*:|runtime\s*:|subtitles\s*:|samples\s*:|links\s*:|download|directed by\s*:|starring\s*:/i;
+    const isRedStyle = style => /color\s*:\s*(#ff0000|red)\b/i.test(style || '');
+
+    for (const p of content.querySelectorAll('p')) {
+      const text = cleanText(p.textContent || '');
+      if (!text || labelPattern.test(text)) continue;
+
+      const redEls = [...p.querySelectorAll('[style]')].filter(el => isRedStyle(el.getAttribute('style')));
+      if (!redEls.length) continue;
+
+      const redText = redEls.map(el => cleanText(el.textContent || '')).join(' ');
+      if (redText.length < 10) continue;
+
+      return text;
+    }
+
+    return '';
   }
 
   function extractReleases(content) {
@@ -3574,6 +3606,34 @@
         border-radius: 12px;
         background: rgba(0,0,0,.16);
         border: 1px solid rgba(255,255,255,.06);
+      }
+
+      .rbb-notice-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 9px;
+        border-radius: 999px;
+        background: rgba(239,68,68,.14);
+        border: 1px solid rgba(239,68,68,.4);
+        color: #ff9d9d;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: .02em;
+        text-transform: uppercase;
+        cursor: help;
+      }
+
+      .rbb-notice-card {
+        margin: 8px 0 12px;
+        padding: 10px 14px;
+        border-radius: 12px;
+        background: rgba(239,68,68,.1);
+        border: 1px solid rgba(239,68,68,.4);
+        color: #ffd3d3;
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.5;
       }
 
       .rbb-post-plot {
