@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.2.1
+// @version      2.3.0
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -809,17 +809,21 @@
       ['Metacritic', data.ratingMetacritic]
     ].filter(([, value]) => value && value.toUpperCase() !== 'N/A');
 
-    const hasAnything = data.plot || data.genre || data.director || data.cast || ratingRows.length;
+    const hasAnything = data.plot || data.genre || data.director || data.cast || ratingRows.length || data.trailerUrl;
     if (!hasAnything) return '';
 
     return `
       <section class="rbb-post-meta">
         ${data.plot ? `<p class="rbb-post-plot">${esc(data.plot)}</p>` : ''}
-        ${ratingRows.length ? `
+        ${(ratingRows.length || data.trailerUrl) ? `
           <div class="rbb-rating-row">
-            ${ratingRows.map(([label, value]) => `
-              <div class="rbb-rating-pill"><span class="rbb-rating-label">${esc(label)}</span><span class="rbb-rating-value">${esc(value)}</span></div>
-            `).join('')}
+            ${ratingRows.map(([label, value]) => {
+              const isImdb = label === 'IMDB' && data.imdbUrl;
+              const tag = isImdb ? 'a' : 'div';
+              const attrs = isImdb ? ` href="${escAttr(data.imdbUrl)}" target="_blank" rel="noopener noreferrer" title="Open on IMDb"` : '';
+              return `<${tag} class="rbb-rating-pill${isImdb ? ' rbb-rating-pill-link' : ''}"${attrs}><span class="rbb-rating-label">${esc(label)}</span><span class="rbb-rating-value">${esc(value)}</span></${tag}>`;
+            }).join('')}
+            ${data.trailerUrl ? `<a class="rbb-trailer-pill" href="${escAttr(data.trailerUrl)}" target="_blank" rel="noopener noreferrer" title="Watch trailer">▶ Trailer</a>` : ''}
           </div>
         ` : ''}
         <div class="rbb-post-facts">
@@ -971,8 +975,23 @@
     let ratingMetacritic = '';
     let director = '';
     let cast = '';
+    let imdbUrl = '';
+    let trailerUrl = '';
 
     for (const p of paragraphs) {
+      if (!imdbUrl || !trailerUrl) {
+        for (const a of p.querySelectorAll('a[href]')) {
+          const linkText = cleanText(a.textContent || '').toLowerCase();
+          // the "Links:" paragraph anchor text is exactly "iMDB" -- other imdb.com/title/...
+          // anchors on the page (Awards, See more awards) match the URL shape too, so also
+          // require the plain "imdb" label to avoid picking one of those instead.
+          if (!imdbUrl && /imdb\.com\/title\/[a-z0-9]+\/?(\?|$)/i.test(a.href) && /^i?mdb$/i.test(linkText)) {
+            imdbUrl = abs(a.href);
+          }
+          if (!trailerUrl && /(youtube\.com\/watch|youtu\.be\/)/i.test(a.href)) trailerUrl = abs(a.href);
+        }
+      }
+
       if (!plot) {
         const plotMatch = (p.textContent || '').match(/^\s*plot\s*:\s*([^]*)$/i);
         if (plotMatch) plot = cleanText(plotMatch[1]);
@@ -999,7 +1018,7 @@
       }
     }
 
-    return { plot, genre, ratingImdb, ratingTmdb, ratingRotten, ratingMetacritic, director, cast };
+    return { plot, genre, ratingImdb, ratingTmdb, ratingRotten, ratingMetacritic, director, cast, imdbUrl, trailerUrl };
   }
 
   function extractReleases(content) {
@@ -3596,6 +3615,41 @@
         font-size: 13px;
         font-weight: 850;
         color: #f7dca3;
+      }
+
+      .rbb-rating-pill-link {
+        text-decoration: none;
+        cursor: pointer;
+        transition: background .12s ease, border-color .12s ease, transform .12s ease;
+      }
+
+      .rbb-rating-pill-link:hover {
+        background: rgba(255,255,255,.1);
+        border-color: rgba(255,255,255,.18);
+        transform: translateY(-1px);
+      }
+
+      .rbb-trailer-pill {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 10px;
+        background: linear-gradient(135deg, #b91c1c, #ef4444);
+        border: 1px solid rgba(255,255,255,.1);
+        color: #fff;
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: .02em;
+        text-decoration: none;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: filter .12s ease, transform .12s ease;
+      }
+
+      .rbb-trailer-pill:hover {
+        filter: brightness(1.12);
+        transform: translateY(-1px);
       }
 
       .rbb-post-facts {
