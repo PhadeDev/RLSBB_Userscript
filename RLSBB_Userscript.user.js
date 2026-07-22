@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.5.0
+// @version      2.5.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -2818,7 +2818,12 @@
       '.pagination',
       '.nav-links',
       '.page-header',
-      '#wpfront-scroll-top-container'
+      '#wpfront-scroll-top-container',
+      // the site's actual scroll-to-top/bottom widget (not wpfront, despite the plugin CSS
+      // file's name) -- up/down arrow buttons floating bottom-right of the raw page.
+      '.scroll-btn-container',
+      '#scroll-to-top',
+      '#scroll-to-bottom'
     ];
 
     selectors.forEach(selector => {
