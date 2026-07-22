@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.4.0
+// @version      2.5.0
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -812,7 +812,8 @@
       ['Metacritic', data.ratingMetacritic]
     ].filter(([, value]) => value && value.toUpperCase() !== 'N/A');
 
-    const hasAnything = data.plot || data.genre || data.director || data.cast || ratingRows.length || data.trailerUrl;
+    const hasAnything = data.plot || data.genre || data.director || data.cast || ratingRows.length
+      || data.trailerUrl || data.steamUrl || data.nfoUrl;
     if (!hasAnything) return '';
 
     return `
@@ -827,6 +828,12 @@
               return `<${tag} class="rbb-rating-pill${isImdb ? ' rbb-rating-pill-link' : ''}"${attrs}><span class="rbb-rating-label">${esc(label)}</span><span class="rbb-rating-value">${esc(value)}</span></${tag}>`;
             }).join('')}
             ${data.trailerUrl ? `<a class="rbb-trailer-pill" href="${escAttr(data.trailerUrl)}" target="_blank" rel="noopener noreferrer" title="Watch trailer">▶ Trailer</a>` : ''}
+          </div>
+        ` : ''}
+        ${(data.steamUrl || data.nfoUrl) ? `
+          <div class="rbb-links-row">
+            ${data.steamUrl ? `<a class="rbb-steam-pill" href="${escAttr(data.steamUrl)}" target="_blank" rel="noopener noreferrer" title="Open on Steam">Steam</a>` : ''}
+            ${data.nfoUrl ? `<a class="rbb-nfo-pill" href="${escAttr(data.nfoUrl)}" target="_blank" rel="noopener noreferrer" title="Read NFO">NFO</a>` : ''}
           </div>
         ` : ''}
         <div class="rbb-post-facts">
@@ -982,9 +989,11 @@
     let cast = '';
     let imdbUrl = '';
     let trailerUrl = '';
+    let steamUrl = '';
+    let nfoUrl = '';
 
     for (const p of paragraphs) {
-      if (!imdbUrl || !trailerUrl) {
+      if (!imdbUrl || !trailerUrl || !steamUrl || !nfoUrl) {
         for (const a of p.querySelectorAll('a[href]')) {
           const linkText = cleanText(a.textContent || '').toLowerCase();
           // the "Links:" paragraph anchor text is exactly "iMDB" -- other imdb.com/title/...
@@ -994,6 +1003,12 @@
             imdbUrl = abs(a.href);
           }
           if (!trailerUrl && /(youtube\.com\/watch|youtu\.be\/)/i.test(a.href)) trailerUrl = abs(a.href);
+          // Games/PC posts put a "Links: STEAM | NFO | Torrent Search" line in the same spot
+          // movies put "Links: iMDB | Trailer | NFO" -- same anchor-text-based approach as above.
+          if (!steamUrl && /store\.steampowered\.com\/app\//i.test(a.href) && /steam/i.test(linkText)) {
+            steamUrl = abs(a.href);
+          }
+          if (!nfoUrl && /^nfo$/i.test(linkText)) nfoUrl = abs(a.href);
         }
       }
 
@@ -1023,7 +1038,7 @@
       }
     }
 
-    return { plot, genre, ratingImdb, ratingTmdb, ratingRotten, ratingMetacritic, director, cast, imdbUrl, trailerUrl };
+    return { plot, genre, ratingImdb, ratingTmdb, ratingRotten, ratingMetacritic, director, cast, imdbUrl, trailerUrl, steamUrl, nfoUrl };
   }
 
   // Some posts drop a short red-text "Please be advised..."/"Note: ..." callout in its own
@@ -1165,11 +1180,15 @@
   function extractPendingReleaseInfo(p) {
     const text = cleanText(p.textContent || '');
 
-    const sizeMatch = text.match(/size\s*:\s*([^]*?)(?=\s*video\s*:|\s*audio|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|$)/i);
-    const videoMatch = text.match(/video\s*:\s*([^]*?)(?=\s*audio|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|$)/i);
-    const audioMatch = text.match(/audio(?:\s*\d*\s*#?)?\s*:\s*([^]*?)(?=\s*audio\s*\d|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|$)/i);
-    const runtimeMatch = text.match(/runtime\s*:\s*([^]*?)(?=\s*subtitles\s*:|\s*samples\s*:|$)/i);
-    const subtitlesMatch = text.match(/subtitles\s*:\s*([^]*?)(?=\s*samples\s*:|$)/i);
+    // "Links:" (Steam/NFO/Torrent Search on game posts, iMDB/Trailer/NFO on movie posts) can
+    // follow directly after Size with no Video/Audio/etc. line in between -- without it in the
+    // lookahead, Size swallows the whole "Links: ..." tail too (e.g. "96.7 MB Links: STEAM |
+    // NFO | Torrent Search" instead of just "96.7 MB").
+    const sizeMatch = text.match(/size\s*:\s*([^]*?)(?=\s*video\s*:|\s*audio|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|\s*links\s*:|$)/i);
+    const videoMatch = text.match(/video\s*:\s*([^]*?)(?=\s*audio|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|\s*links\s*:|$)/i);
+    const audioMatch = text.match(/audio(?:\s*\d*\s*#?)?\s*:\s*([^]*?)(?=\s*audio\s*\d|\s*runtime\s*:|\s*subtitles\s*:|\s*samples\s*:|\s*links\s*:|$)/i);
+    const runtimeMatch = text.match(/runtime\s*:\s*([^]*?)(?=\s*subtitles\s*:|\s*samples\s*:|\s*links\s*:|$)/i);
+    const subtitlesMatch = text.match(/subtitles\s*:\s*([^]*?)(?=\s*samples\s*:|\s*links\s*:|$)/i);
 
     const videoLine = videoMatch ? cleanText(videoMatch[1]) : '';
     const formatMatch = videoLine.match(/\b(MKV|MP4|AVI|RAR|ISO)\b/i);
@@ -1433,9 +1452,9 @@
     const href = a.href || '';
     const label = cleanText(a.textContent || '');
 
-    if (/nitroflare|torrent|subtitles/i.test(label + ' ' + href)) return false;
-    if (/screenshot|sample|nfo/i.test(label)) return true;
-    if (/img\.protected\.to|nfo\.protected\.to/i.test(href)) return true;
+    if (/nitroflare|torrent|subtitles|nfo/i.test(label + ' ' + href)) return false;
+    if (/screenshot|sample/i.test(label)) return true;
+    if (/img\.protected\.to/i.test(href)) return true;
 
     return false;
   }
@@ -3712,6 +3731,53 @@
 
       .rbb-trailer-pill:hover {
         filter: brightness(1.12);
+        transform: translateY(-1px);
+      }
+
+      .rbb-links-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .rbb-steam-pill,
+      .rbb-steam-pill:visited,
+      .rbb-steam-pill:hover,
+      .rbb-steam-pill:active,
+      .rbb-nfo-pill,
+      .rbb-nfo-pill:visited,
+      .rbb-nfo-pill:hover,
+      .rbb-nfo-pill:active {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,.1);
+        color: #fff !important;
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: .02em;
+        text-decoration: none !important;
+        text-transform: uppercase;
+        cursor: pointer;
+        transition: filter .12s ease, transform .12s ease;
+      }
+
+      .rbb-steam-pill,
+      .rbb-steam-pill:visited {
+        background: linear-gradient(135deg, #1b2838, #2a475e);
+      }
+
+      .rbb-nfo-pill,
+      .rbb-nfo-pill:visited {
+        background: linear-gradient(135deg, #3f3f46, #71717a);
+      }
+
+      .rbb-steam-pill:hover,
+      .rbb-nfo-pill:hover {
+        filter: brightness(1.2);
         transform: translateY(-1px);
       }
 
