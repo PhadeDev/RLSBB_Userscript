@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.6.3
+// @version      2.6.4
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -26,6 +26,11 @@
 // @grant        GM_download
 // @grant        GM_info
 // @grant        GM_setClipboard
+// @grant        GM_getResourceURL
+// @resource     rbbQuality4k https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/4k.png
+// @resource     rbbQuality1080p https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/1080p.png
+// @resource     rbbQuality720p https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/720p.png
+// @resource     rbbQuality8k https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/8k.png
 // @run-at       document-end
 // @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
 // @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
@@ -620,11 +625,6 @@
           </div>
         </div>
 
-        <div class="rbb-badges">
-          ${data.cardBadges.map(chipHtml).join('')}
-          ${data.notice && !detail ? `<span class="rbb-notice-pill" title="${escAttr(data.notice)}">&#9888; Note</span>` : ''}
-        </div>
-
         ${detail && data.notice ? `<div class="rbb-notice-card">&#9888; ${esc(data.notice)}</div>` : ''}
 
         ${detail ? makePostMetaHtml(data) : (data.description ? `<p class="rbb-description">${esc(data.description)}</p>` : '')}
@@ -803,12 +803,13 @@
       : '';
 
     const tokens = release.tokens.join(' ');
+    const qualityLabel = qualityLabelHtml(primaryQuality);
 
     return `
       <div class="rbb-release-row ${isBest ? 'rbb-best-row' : ''}" data-version-tokens="${escAttr(tokens)}">
         <div class="rbb-release-top">
           <div class="rbb-quality-block">
-            <div class="rbb-quality-label rbb-quality-${escAttr(chipKey(primaryQuality))}">${esc(primaryQuality)}</div>
+            ${qualityLabel}
             <div class="rbb-size-badge">${esc(release.size || 'size unknown')}</div>
           </div>
 
@@ -930,6 +931,53 @@
     return `<span class="rbb-chip rbb-chip-${escAttr(key)}">${esc(label)}</span>`;
   }
 
+  function qualityIconKey(label) {
+    const text = String(label || '').toLowerCase();
+    if (/\b(8k|4320p)\b/.test(text)) return '8k';
+    if (/\b(4k|2160p|uhd)\b/.test(text)) return '4k';
+    if (/\b1080p\b/.test(text)) return '1080p';
+    if (/\b720p\b/.test(text)) return '720p';
+    return '';
+  }
+
+  function qualityIconUrl(label) {
+    const key = qualityIconKey(label);
+    if (!key) return '';
+
+    const resourceNames = {
+      '8k': 'rbbQuality8k',
+      '4k': 'rbbQuality4k',
+      '1080p': 'rbbQuality1080p',
+      '720p': 'rbbQuality720p'
+    };
+
+    const resourceName = resourceNames[key];
+    try {
+      if (typeof GM_getResourceURL === 'function') {
+        const url = GM_getResourceURL(resourceName);
+        if (url) return url;
+      }
+    } catch {
+      // Fall back below for local smoke tests or managers without resource support.
+    }
+
+    return `https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/${key}.png`;
+  }
+
+  function qualityLabelHtml(label) {
+    const key = qualityIconKey(label);
+    const iconUrl = qualityIconUrl(label);
+    if (key && iconUrl) {
+      return `
+        <div class="rbb-quality-label rbb-quality-image rbb-quality-${escAttr(key)}" title="${escAttr(label)}">
+          <img class="rbb-quality-img" src="${escAttr(iconUrl)}" alt="${escAttr(label)}">
+        </div>
+      `;
+    }
+
+    return `<div class="rbb-quality-label rbb-quality-${escAttr(chipKey(label))}">${esc(label)}</div>`;
+  }
+
   function chipKey(label) {
     const text = String(label || '').toLowerCase();
     if (text === '4k' || text === '2160p') return '4k';
@@ -938,8 +986,8 @@
     if (text === '480p') return '480p';
     if (text === 'hdr') return 'hdr';
     if (text === 'dv') return 'dv';
-    if (text === 'x265' || text === 'hevc') return 'x265';
-    if (text === 'x264') return 'x264';
+    if (text === 'x265' || text === 'h265' || text === 'hevc') return 'x265';
+    if (text === 'x264' || text === 'h264') return 'x264';
     if (text === 'web-dl') return 'webdl';
     if (text === 'webrip') return 'webrip';
     if (text === 'bluray') return 'bluray';
@@ -1552,8 +1600,8 @@
       ['480p', /\b480p\b/i]
     ];
     const codecChecks = [
-      ['x265', /\b(x265|h265|hevc)\b/i],
-      ['x264', /\b(x264|h264|avc)\b/i]
+      ['H265', /\b(x265|h265|hevc)\b/i],
+      ['H264', /\b(x264|h264|avc)\b/i]
     ];
     const checks = [
       ['WEB-DL', /\bweb[- ]?dl\b/i],
@@ -3771,8 +3819,8 @@
       .rbb-chip-480p { color: #d7dee7; background: rgba(96, 106, 118, .60); border-color: rgba(210, 220, 230, .18); }
       .rbb-chip-hdr { color: #f0e7ff; background: rgba(113, 78, 181, .66); border-color: rgba(192, 159, 255, .28); }
       .rbb-chip-dv { color: #ffe3f3; background: rgba(161, 62, 129, .70); border-color: rgba(255, 144, 212, .28); }
-      .rbb-chip-x265 { color: #defaf1; background: rgba(47, 126, 103, .66); border-color: rgba(128, 234, 202, .24); }
-      .rbb-chip-x264 { color: #eef5fb; background: rgba(86, 103, 122, .62); border-color: rgba(200, 215, 230, .18); }
+      .rbb-chip-x265 { color: #281901; background: linear-gradient(135deg, #d39a25, #ffe28c); border-color: rgba(255, 219, 121, .50); }
+      .rbb-chip-x264 { color: #071826; background: linear-gradient(135deg, #8bc7ff, #dff1ff); border-color: rgba(164, 215, 255, .42); }
       .rbb-chip-webdl { color: #e6f4ff; background: rgba(55, 100, 136, .68); border-color: rgba(132, 196, 244, .24); }
       .rbb-chip-webrip { color: #e8f6ff; background: rgba(52, 90, 124, .62); border-color: rgba(132, 196, 244, .20); }
       .rbb-chip-bluray { color: #ece8ff; background: rgba(71, 72, 143, .66); border-color: rgba(166, 168, 255, .22); }
@@ -4065,11 +4113,12 @@
         flex: 0 0 auto;
         display: flex;
         flex-direction: column;
-        gap: 5px;
-        min-width: 60px;
+        align-items: center;
+        gap: 7px;
+        min-width: 74px;
       }
 
-      .rbb-detail-card .rbb-quality-block { gap: 7px; min-width: 76px; }
+      .rbb-detail-card .rbb-quality-block { gap: 8px; min-width: 92px; }
 
       .rbb-release-main {
         flex: 1;
@@ -4077,21 +4126,40 @@
       }
 
       .rbb-quality-label {
-        width: fit-content;
-        min-width: 52px;
+        width: 66px;
+        min-width: 66px;
+        height: 58px;
         text-align: center;
-        border-radius: 999px;
-        padding: 5px 8px;
+        border-radius: 9px;
+        padding: 0;
         font-size: 11px;
         font-weight: 1000;
         color: #101820;
         background: linear-gradient(135deg, #dbe9f6, #ffffff);
+        display: grid;
+        place-items: center;
+        overflow: hidden;
       }
 
       .rbb-detail-card .rbb-quality-label {
-        min-width: 68px;
-        padding: 8px 12px;
+        width: 86px;
+        min-width: 86px;
+        height: 75px;
+        padding: 0;
         font-size: 15px;
+      }
+
+      .rbb-quality-image {
+        background: transparent !important;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .rbb-quality-img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
       }
 
       .rbb-quality-4k {
@@ -4115,8 +4183,8 @@
       }
 
       .rbb-size-badge {
-        width: fit-content;
-        min-width: 52px;
+        width: 66px;
+        min-width: 66px;
         text-align: center;
         border-radius: 8px;
         padding: 5px 7px;
@@ -4130,7 +4198,8 @@
       }
 
       .rbb-detail-card .rbb-size-badge {
-        min-width: 68px;
+        width: 86px;
+        min-width: 86px;
         padding: 7px 10px;
         font-size: 15px;
       }
@@ -4169,6 +4238,22 @@
 
       .rbb-release-row .rbb-release-badges .rbb-chip { font-size: 9px; padding: 2px 6px; min-height: 15px; }
       .rbb-detail-card .rbb-release-row .rbb-release-badges .rbb-chip { font-size: 10px; padding: 3px 8px; min-height: 20px; }
+      .rbb-release-row .rbb-release-badges .rbb-chip-x265,
+      .rbb-release-row .rbb-release-badges .rbb-chip-x264 {
+        min-height: 22px;
+        padding: 4px 10px;
+        border-radius: 8px;
+        font-size: 11px;
+        font-weight: 1000;
+        letter-spacing: .02em;
+      }
+
+      .rbb-detail-card .rbb-release-row .rbb-release-badges .rbb-chip-x265,
+      .rbb-detail-card .rbb-release-row .rbb-release-badges .rbb-chip-x264 {
+        min-height: 25px;
+        padding: 5px 12px;
+        font-size: 12px;
+      }
 
       .rbb-release-actions {
         display: flex;
