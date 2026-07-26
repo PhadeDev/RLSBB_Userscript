@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.6.5
+// @version      2.7.0
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -33,6 +33,11 @@
 // @resource     rbbQuality8k https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/8k.png
 // @resource     rbbCodecH264 https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/codec/h264.png
 // @resource     rbbCodecH265 https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/codec/h265.png
+// @resource     rbbCodecAV1 https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/codec/av1.png
+// @resource     rbbFeatureHDR https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/feature/hdr.png
+// @resource     rbbFeatureDV https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/feature/dv.png
+// @resource     rbbAudioAtmos https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/audio/atmos.png
+// @resource     rbbWarningDCPRip https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/warning/dcprip.png
 // @run-at       document-end
 // @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
 // @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
@@ -761,8 +766,12 @@
     // The quality label already shows this prominently on its own -- repeating it as a small
     // badge too (e.g. "4K" pill next to a "4K" chip) was just visual noise.
     const pairedCodec = release.badges.find(isCodecBadge);
+    const impactIcons = release.badges
+      .filter(isImpactIconBadge)
+      .map(impactIconHtml)
+      .join('');
     const chips = release.badges
-      .filter(badge => chipKey(badge) !== chipKey(primaryQuality) && !isCodecBadge(badge))
+      .filter(badge => chipKey(badge) !== chipKey(primaryQuality) && !isCodecBadge(badge) && !isImpactIconBadge(badge))
       .map(chipHtml)
       .join('');
 
@@ -815,6 +824,7 @@
           <div class="rbb-quality-block">
             ${qualityLabel}
             ${codecLabel}
+            ${impactIcons}
             <div class="rbb-size-badge">${esc(release.size || 'size unknown')}</div>
           </div>
 
@@ -987,6 +997,7 @@
     const key = chipKey(label);
     if (key === 'x265') return 'h265';
     if (key === 'x264') return 'h264';
+    if (key === 'av1') return 'av1';
     return '';
   }
 
@@ -996,7 +1007,8 @@
 
     const resourceNames = {
       h265: 'rbbCodecH265',
-      h264: 'rbbCodecH264'
+      h264: 'rbbCodecH264',
+      av1: 'rbbCodecAV1'
     };
 
     const resourceName = resourceNames[key];
@@ -1024,6 +1036,51 @@
     `;
   }
 
+  function impactIconKey(label) {
+    const key = chipKey(label);
+    if (key === 'hdr') return 'hdr';
+    if (key === 'dv') return 'dv';
+    if (key === 'atmos') return 'atmos';
+    if (key === 'dcprip') return 'dcprip';
+    return '';
+  }
+
+  function impactIconUrl(label) {
+    const key = impactIconKey(label);
+    if (!key) return '';
+
+    const resourceNames = {
+      hdr: 'rbbFeatureHDR',
+      dv: 'rbbFeatureDV',
+      atmos: 'rbbAudioAtmos',
+      dcprip: 'rbbWarningDCPRip'
+    };
+    const resourceName = resourceNames[key];
+    try {
+      if (typeof GM_getResourceURL === 'function') {
+        const url = GM_getResourceURL(resourceName);
+        if (url) return url;
+      }
+    } catch {
+      // Fall back below for local smoke tests or managers without resource support.
+    }
+
+    const folder = key === 'atmos' ? 'audio' : (key === 'dcprip' ? 'warning' : 'feature');
+    return `https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/${folder}/${key}.png`;
+  }
+
+  function impactIconHtml(label) {
+    const key = impactIconKey(label);
+    const iconUrl = impactIconUrl(label);
+    if (!key || !iconUrl) return '';
+
+    return `
+      <div class="rbb-impact-label rbb-impact-${escAttr(key)}" title="${escAttr(label)}">
+        <img class="rbb-impact-img" src="${escAttr(iconUrl)}" alt="${escAttr(label)}">
+      </div>
+    `;
+  }
+
   function chipKey(label) {
     const text = String(label || '').toLowerCase();
     if (text === '4k' || text === '2160p') return '4k';
@@ -1032,12 +1089,14 @@
     if (text === '480p') return '480p';
     if (text === 'hdr') return 'hdr';
     if (text === 'dv') return 'dv';
+    if (text === 'av1') return 'av1';
     if (text === 'x265' || text === 'h265' || text === 'hevc') return 'x265';
     if (text === 'x264' || text === 'h264') return 'x264';
     if (text === 'web-dl') return 'webdl';
     if (text === 'webrip') return 'webrip';
     if (text === 'bluray') return 'bluray';
     if (text === 'atmos') return 'atmos';
+    if (text === 'dcprip' || text === 'dcp-rip' || text === 'dcrip') return 'dcprip';
     return 'default';
   }
 
@@ -1646,10 +1705,12 @@
       ['480p', /\b480p\b/i]
     ];
     const codecChecks = [
-      ['H265', /\b(x265|h265|hevc)\b/i],
-      ['H264', /\b(x264|h264|avc)\b/i]
+      ['AV1', /\bav1\b/i],
+      ['H265', /\b(x265|h\.?265|hevc)\b/i],
+      ['H264', /\b(x264|h\.?264|avc)\b/i]
     ];
     const checks = [
+      ['DCPRip', /\bdcp[- ]?rip\b/i],
       ['WEB-DL', /\bweb[- ]?dl\b/i],
       ['WEBRip', /\bwebrip\b/i],
       ['BluRay', /\bblu[- ]?ray|bdrip\b/i],
@@ -1671,7 +1732,11 @@
   }
 
   function isCodecBadge(label) {
-    return ['x265', 'x264'].includes(chipKey(label));
+    return ['x265', 'x264', 'av1'].includes(chipKey(label));
+  }
+
+  function isImpactIconBadge(label) {
+    return ['hdr', 'dv', 'atmos', 'dcprip'].includes(chipKey(label));
   }
 
   function cardBadgesForArticle(text, releases) {
@@ -4225,6 +4290,29 @@
       }
 
       .rbb-codec-img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+
+      .rbb-impact-label {
+        width: 76px;
+        min-width: 76px;
+        height: 32px;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      .rbb-detail-card .rbb-impact-label {
+        width: 94px;
+        min-width: 94px;
+        height: 40px;
+      }
+
+      .rbb-impact-img {
         width: 100%;
         height: 100%;
         object-fit: contain;
