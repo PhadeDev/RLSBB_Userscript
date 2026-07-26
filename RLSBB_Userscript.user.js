@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.6.1
+// @version      2.6.3
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -981,7 +981,7 @@
     const postMeta = extractPostMeta(content);
     const description = postMeta.plot || extractDescription(content);
     const notice = extractPostNotice(content);
-    const cardBadges = detectBadges(title + ' ' + readableText);
+    const cardBadges = cardBadgesForArticle(title + ' ' + readableText, releases);
 
     return {
       id,
@@ -1544,24 +1544,67 @@
   }
 
   function detectBadges(text) {
-    const checks = [
+    const labelText = String(text || '');
+    const qualityChecks = [
       ['4K', /\b(4k|2160p|uhd)\b/i],
       ['1080p', /\b1080p\b/i],
       ['720p', /\b720p\b/i],
-      ['480p', /\b480p\b/i],
+      ['480p', /\b480p\b/i]
+    ];
+    const codecChecks = [
+      ['x265', /\b(x265|h265|hevc)\b/i],
+      ['x264', /\b(x264|h264|avc)\b/i]
+    ];
+    const checks = [
       ['WEB-DL', /\bweb[- ]?dl\b/i],
       ['WEBRip', /\bwebrip\b/i],
       ['BluRay', /\bblu[- ]?ray|bdrip\b/i],
       ['HDR', /\bhdr\b/i],
       ['DV', /\b(dv|dolby vision)\b/i],
-      ['x265', /\b(x265|h265|hevc)\b/i],
-      ['x264', /\b(x264|h264|avc)\b/i],
       ['Atmos', /\batmos\b/i]
     ];
 
-    return checks
-      .filter(([, re]) => re.test(text))
-      .map(([label]) => label)
+    return [
+      ...qualityChecks.filter(([, re]) => re.test(labelText)).slice(0, 1).map(([label]) => label),
+      ...checks.filter(([, re]) => re.test(labelText)).map(([label]) => label),
+      ...codecChecks.filter(([, re]) => re.test(labelText)).slice(0, 1).map(([label]) => label)
+    ]
+      .slice(0, 8);
+  }
+
+  function isQualityBadge(label) {
+    return ['4k', '1080p', '720p', '480p'].includes(chipKey(label));
+  }
+
+  function isCodecBadge(label) {
+    return ['x265', 'x264'].includes(chipKey(label));
+  }
+
+  function cardBadgesForArticle(text, releases) {
+    const fallback = detectBadges(text);
+    const bestRelease = chooseBestRelease(releases);
+    if (!bestRelease) return fallback;
+
+    const badges = [];
+    if (bestRelease.primaryQuality && bestRelease.primaryQuality !== 'Release') {
+      badges.push(bestRelease.primaryQuality);
+    }
+
+    bestRelease.badges
+      .filter(badge => !isQualityBadge(badge) && !isCodecBadge(badge))
+      .forEach(badge => badges.push(badge));
+
+    const pairedCodec = bestRelease.badges.find(isCodecBadge);
+    if (pairedCodec) badges.push(pairedCodec);
+
+    const seen = new Set();
+    return badges
+      .filter(badge => {
+        const key = chipKey(badge);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .slice(0, 8);
   }
 
