@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.6.0
+// @version      2.6.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -656,16 +656,27 @@
 
   // The card image box used a single fixed aspect-ratio for every post, so wide banners
   // (e.g. 520x170 TV-doc headers) got their edges cropped and tall posters got squashed
-  // down to a thin cropped sliver. Instead, size the box to the real image's own ratio
-  // (clamped so one outlier can't blow the grid row out), then let object-fit:contain
-  // show the whole image inside it rather than cropping to fill.
+  // down to a thin cropped sliver. Size the box from the real image ratio, but classify
+  // portrait art separately so CSS can keep posters compact instead of letting one tall
+  // image blow out the whole card row or lightbox.
   function fitImageAspect(container, img) {
     const apply = () => {
       const w = img.naturalWidth;
       const h = img.naturalHeight;
       if (!w || !h) return;
-      const ratio = Math.min(3.4, Math.max(0.55, w / h));
+      const rawRatio = w / h;
+      const ratio = Math.min(3.4, Math.max(0.55, rawRatio));
+      const card = container.closest('.rbb-card');
       container.style.aspectRatio = `${ratio} / 1`;
+      container.style.setProperty('--rbb-img-ratio', `${ratio} / 1`);
+      container.classList.toggle('rbb-image-portrait', rawRatio < 0.85);
+      container.classList.toggle('rbb-image-landscape', rawRatio >= 0.85);
+      container.classList.toggle('rbb-image-wide', rawRatio >= 2.1);
+      if (card) {
+        card.classList.toggle('rbb-card-portrait-media', rawRatio < 0.85);
+        card.classList.toggle('rbb-card-landscape-media', rawRatio >= 0.85);
+        card.classList.toggle('rbb-card-wide-media', rawRatio >= 2.1);
+      }
     };
     if (img.complete && img.naturalWidth) apply();
     else img.addEventListener('load', apply, { once: true });
@@ -3354,11 +3365,12 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
         gap: 12px;
-        align-items: stretch;
+        align-items: start;
       }
 
       .rbb-card > .rbb-content {
         flex: 1;
+        min-width: 0;
       }
 
       /* post detail pages only ever hold a single card - the dense auto-fill
@@ -3448,11 +3460,7 @@
         background: linear-gradient(155deg, rgba(255,255,255,.074), rgba(255,255,255,.028));
         backdrop-filter: blur(18px);
         box-shadow: 0 12px 34px rgba(0,0,0,.30);
-        /* .rbb-grid stretches every card in a row to match the tallest one (align-items:
-           stretch) -- the card itself has to actually fill that height, rather than
-           shrink-wrap its content, so leftover space becomes blank space at the bottom of
-           shorter cards instead of every card being its own random height. */
-        height: 100%;
+        height: auto;
         display: flex;
         flex-direction: column;
       }
@@ -3479,6 +3487,7 @@
         justify-content: center;
         width: calc(100% - 16px);
         aspect-ratio: 16 / 6;
+        max-height: 190px;
         overflow: hidden;
         background: #071019;
         border-radius: 12px;
@@ -3490,8 +3499,93 @@
       .rbb-detail-card .rbb-image {
         width: calc(100% - 20px);
         aspect-ratio: 520 / 170;
+        max-height: min(320px, 38vh);
         border-radius: 16px;
         margin: 10px 10px 0;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) {
+        display: grid;
+        grid-template-columns: minmax(108px, 34%) minmax(0, 1fr);
+        grid-template-rows: auto;
+        column-gap: 10px;
+        align-items: start;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) > .rbb-image {
+        grid-column: 1;
+        grid-row: 1;
+        width: auto;
+        height: min(190px, 34vw);
+        max-height: 190px;
+        margin: 8px 0 8px 8px;
+        aspect-ratio: auto !important;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) > .rbb-content {
+        grid-column: 2;
+        grid-row: 1;
+        padding: 10px 8px 10px 0;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-card-title {
+        margin-top: 0 !important;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-description {
+        -webkit-line-clamp: 2;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-list {
+        margin-top: 7px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-row {
+        padding: 9px;
+        gap: 8px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-top {
+        gap: 8px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-actions {
+        padding-top: 7px;
+        gap: 6px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-rg {
+        gap: 7px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-dl-btn {
+        min-height: 34px;
+        padding: 7px 8px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-dl-label {
+        font-size: 11px;
+      }
+
+      .rbb-detail-card.rbb-card-portrait-media {
+        display: grid;
+        grid-template-columns: minmax(190px, 31%) minmax(0, 1fr);
+        column-gap: 16px;
+        align-items: start;
+      }
+
+      .rbb-detail-card.rbb-card-portrait-media > .rbb-image {
+        grid-column: 1;
+        width: min(260px, calc(100% - 10px));
+        height: min(300px, 34vh);
+        max-height: min(300px, 34vh);
+        margin: 10px 0 10px 10px;
+        aspect-ratio: auto !important;
+      }
+
+      .rbb-detail-card.rbb-card-portrait-media > .rbb-content {
+        grid-column: 2;
+        padding: 16px 16px 16px 0;
       }
 
       .rbb-image img {
@@ -4608,8 +4702,43 @@
           grid-template-columns: 1fr;
         }
 
+        .rbb-card-portrait-media:not(.rbb-detail-card) {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .rbb-card-portrait-media:not(.rbb-detail-card) > .rbb-image {
+          width: min(180px, calc(100% - 16px));
+          height: auto;
+          margin: 8px auto 0;
+          aspect-ratio: var(--rbb-img-ratio, 2 / 3) !important;
+        }
+
+        .rbb-card-portrait-media:not(.rbb-detail-card) > .rbb-content {
+          padding: 11px 12px 12px;
+        }
+
         .rbb-release-rg {
           flex-direction: column;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .rbb-detail-card.rbb-card-portrait-media {
+          display: flex;
+          flex-direction: column;
+        }
+
+        .rbb-detail-card.rbb-card-portrait-media > .rbb-image {
+          width: min(240px, calc(100% - 16px));
+          height: auto;
+          max-height: min(300px, 36vh);
+          margin: 8px auto 0;
+          aspect-ratio: var(--rbb-img-ratio, 2 / 3) !important;
+        }
+
+        .rbb-detail-card.rbb-card-portrait-media > .rbb-content {
+          padding: 16px;
         }
       }
     `;
