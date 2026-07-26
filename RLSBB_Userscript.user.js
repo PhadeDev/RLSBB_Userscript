@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.6.4
+// @version      2.6.5
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -31,6 +31,8 @@
 // @resource     rbbQuality1080p https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/1080p.png
 // @resource     rbbQuality720p https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/720p.png
 // @resource     rbbQuality8k https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/resolution/8k.png
+// @resource     rbbCodecH264 https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/codec/h264.png
+// @resource     rbbCodecH265 https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/codec/h265.png
 // @run-at       document-end
 // @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
 // @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js
@@ -758,8 +760,9 @@
 
     // The quality label already shows this prominently on its own -- repeating it as a small
     // badge too (e.g. "4K" pill next to a "4K" chip) was just visual noise.
+    const pairedCodec = release.badges.find(isCodecBadge);
     const chips = release.badges
-      .filter(badge => chipKey(badge) !== chipKey(primaryQuality))
+      .filter(badge => chipKey(badge) !== chipKey(primaryQuality) && !isCodecBadge(badge))
       .map(chipHtml)
       .join('');
 
@@ -804,12 +807,14 @@
 
     const tokens = release.tokens.join(' ');
     const qualityLabel = qualityLabelHtml(primaryQuality);
+    const codecLabel = codecLabelHtml(pairedCodec);
 
     return `
       <div class="rbb-release-row ${isBest ? 'rbb-best-row' : ''}" data-version-tokens="${escAttr(tokens)}">
         <div class="rbb-release-top">
           <div class="rbb-quality-block">
             ${qualityLabel}
+            ${codecLabel}
             <div class="rbb-size-badge">${esc(release.size || 'size unknown')}</div>
           </div>
 
@@ -976,6 +981,47 @@
     }
 
     return `<div class="rbb-quality-label rbb-quality-${escAttr(chipKey(label))}">${esc(label)}</div>`;
+  }
+
+  function codecIconKey(label) {
+    const key = chipKey(label);
+    if (key === 'x265') return 'h265';
+    if (key === 'x264') return 'h264';
+    return '';
+  }
+
+  function codecIconUrl(label) {
+    const key = codecIconKey(label);
+    if (!key) return '';
+
+    const resourceNames = {
+      h265: 'rbbCodecH265',
+      h264: 'rbbCodecH264'
+    };
+
+    const resourceName = resourceNames[key];
+    try {
+      if (typeof GM_getResourceURL === 'function') {
+        const url = GM_getResourceURL(resourceName);
+        if (url) return url;
+      }
+    } catch {
+      // Fall back below for local smoke tests or managers without resource support.
+    }
+
+    return `https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/codec/${key}.png`;
+  }
+
+  function codecLabelHtml(label) {
+    const key = codecIconKey(label);
+    const iconUrl = codecIconUrl(label);
+    if (!key || !iconUrl) return '';
+
+    return `
+      <div class="rbb-codec-label rbb-codec-${escAttr(key)}" title="${escAttr(label)}">
+        <img class="rbb-codec-img" src="${escAttr(iconUrl)}" alt="${escAttr(label)}">
+      </div>
+    `;
   }
 
   function chipKey(label) {
@@ -4114,11 +4160,11 @@
         display: flex;
         flex-direction: column;
         align-items: center;
-        gap: 7px;
-        min-width: 74px;
+        gap: 5px;
+        min-width: 80px;
       }
 
-      .rbb-detail-card .rbb-quality-block { gap: 8px; min-width: 92px; }
+      .rbb-detail-card .rbb-quality-block { gap: 7px; min-width: 96px; }
 
       .rbb-release-main {
         flex: 1;
@@ -4126,9 +4172,9 @@
       }
 
       .rbb-quality-label {
-        width: 66px;
-        min-width: 66px;
-        height: 58px;
+        width: 76px;
+        min-width: 76px;
+        height: 67px;
         text-align: center;
         border-radius: 9px;
         padding: 0;
@@ -4142,9 +4188,9 @@
       }
 
       .rbb-detail-card .rbb-quality-label {
-        width: 86px;
-        min-width: 86px;
-        height: 75px;
+        width: 94px;
+        min-width: 94px;
+        height: 82px;
         padding: 0;
         font-size: 15px;
       }
@@ -4156,6 +4202,29 @@
       }
 
       .rbb-quality-img {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+
+      .rbb-codec-label {
+        width: 76px;
+        min-width: 76px;
+        height: 54px;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        background: transparent;
+      }
+
+      .rbb-detail-card .rbb-codec-label {
+        width: 94px;
+        min-width: 94px;
+        height: 66px;
+      }
+
+      .rbb-codec-img {
         width: 100%;
         height: 100%;
         object-fit: contain;
@@ -4183,8 +4252,8 @@
       }
 
       .rbb-size-badge {
-        width: 66px;
-        min-width: 66px;
+        width: 76px;
+        min-width: 76px;
         text-align: center;
         border-radius: 8px;
         padding: 5px 7px;
@@ -4198,8 +4267,8 @@
       }
 
       .rbb-detail-card .rbb-size-badge {
-        width: 86px;
-        min-width: 86px;
+        width: 94px;
+        min-width: 94px;
         padding: 7px 10px;
         font-size: 15px;
       }
