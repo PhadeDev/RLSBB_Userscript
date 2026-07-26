@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.5.1
+// @version      2.6.0
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -654,6 +654,23 @@
     `;
   }
 
+  // The card image box used a single fixed aspect-ratio for every post, so wide banners
+  // (e.g. 520x170 TV-doc headers) got their edges cropped and tall posters got squashed
+  // down to a thin cropped sliver. Instead, size the box to the real image's own ratio
+  // (clamped so one outlier can't blow the grid row out), then let object-fit:contain
+  // show the whole image inside it rather than cropping to fill.
+  function fitImageAspect(container, img) {
+    const apply = () => {
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      if (!w || !h) return;
+      const ratio = Math.min(3.4, Math.max(0.55, w / h));
+      container.style.aspectRatio = `${ratio} / 1`;
+    };
+    if (img.complete && img.naturalWidth) apply();
+    else img.addEventListener('load', apply, { once: true });
+  }
+
   function appendArticle(article, grid, doc = document) {
     const data = extractArticle(article, doc);
 
@@ -671,6 +688,10 @@
     card.dataset.timestamp = data.timestamp ? String(data.timestamp) : '0';
 
     card.innerHTML = buildCardInnerHtml(data, isPostPage, isPostPage);
+
+    const imageLink = card.querySelector('.rbb-image');
+    const cardImg = imageLink?.querySelector('img');
+    if (imageLink && cardImg) fitImageAspect(imageLink, cardImg);
 
     const bridge = card.querySelector('.rbb-extension-bridge');
 
@@ -813,7 +834,7 @@
     ].filter(([, value]) => value && value.toUpperCase() !== 'N/A');
 
     const hasAnything = data.plot || data.genre || data.director || data.cast || ratingRows.length
-      || data.trailerUrl || data.steamUrl || data.nfoUrl;
+      || data.trailerUrl || data.steamUrl || data.nfoUrl || data.homepageUrl || data.hasTvdb;
     if (!hasAnything) return '';
 
     return `
@@ -830,10 +851,14 @@
             ${data.trailerUrl ? `<a class="rbb-trailer-pill" href="${escAttr(data.trailerUrl)}" target="_blank" rel="noopener noreferrer" title="Watch trailer">▶ Trailer</a>` : ''}
           </div>
         ` : ''}
-        ${(data.steamUrl || data.nfoUrl) ? `
+        ${(data.steamUrl || data.nfoUrl || data.homepageUrl || data.hasTvdb) ? `
           <div class="rbb-links-row">
             ${data.steamUrl ? `<a class="rbb-steam-pill" href="${escAttr(data.steamUrl)}" target="_blank" rel="noopener noreferrer" title="Open on Steam">Steam</a>` : ''}
             ${data.nfoUrl ? `<a class="rbb-nfo-pill" href="${escAttr(data.nfoUrl)}" target="_blank" rel="noopener noreferrer" title="Read NFO">NFO</a>` : ''}
+            ${data.homepageUrl ? `<a class="rbb-homepage-pill" href="${escAttr(data.homepageUrl)}" target="_blank" rel="noopener noreferrer" title="Show's official site">Homepage</a>` : ''}
+            ${data.hasTvdb ? (data.tvdbUrl
+              ? `<a class="rbb-tvdb-pill" href="${escAttr(data.tvdbUrl)}" target="_blank" rel="noopener noreferrer" title="Open on TheTVDB">TVDB</a>`
+              : `<span class="rbb-tvdb-pill" title="Listed on TheTVDB">TVDB</span>`) : ''}
           </div>
         ` : ''}
         <div class="rbb-post-facts">
@@ -991,9 +1016,12 @@
     let trailerUrl = '';
     let steamUrl = '';
     let nfoUrl = '';
+    let homepageUrl = '';
+    let tvdbUrl = '';
+    let hasTvdb = false;
 
     for (const p of paragraphs) {
-      if (!imdbUrl || !trailerUrl || !steamUrl || !nfoUrl) {
+      if (!imdbUrl || !trailerUrl || !steamUrl || !nfoUrl || !homepageUrl || !hasTvdb) {
         for (const a of p.querySelectorAll('a[href]')) {
           const linkText = cleanText(a.textContent || '').toLowerCase();
           // the "Links:" paragraph anchor text is exactly "iMDB" -- other imdb.com/title/...
@@ -1009,7 +1037,17 @@
             steamUrl = abs(a.href);
           }
           if (!nfoUrl && /^nfo$/i.test(linkText)) nfoUrl = abs(a.href);
+          // TV posts put "Links: HOMEPAGE – TVDB" where HOMEPAGE points at the show's own
+          // site and TVDB is usually plain text (no link), occasionally linking thetvdb.com.
+          if (!homepageUrl && /^homepage$/i.test(linkText)) homepageUrl = abs(a.href);
+          if (!hasTvdb && (/thetvdb\.com/i.test(a.href) || /^tvdb$/i.test(linkText))) {
+            tvdbUrl = abs(a.href);
+            hasTvdb = true;
+          }
         }
+      }
+      if (!hasTvdb && (homepageUrl || /^\s*links\s*:/i.test(p.textContent || '')) && /\btvdb\b/i.test(p.textContent || '')) {
+        hasTvdb = true;
       }
 
       if (!plot) {
@@ -1038,7 +1076,7 @@
       }
     }
 
-    return { plot, genre, ratingImdb, ratingTmdb, ratingRotten, ratingMetacritic, director, cast, imdbUrl, trailerUrl, steamUrl, nfoUrl };
+    return { plot, genre, ratingImdb, ratingTmdb, ratingRotten, ratingMetacritic, director, cast, imdbUrl, trailerUrl, steamUrl, nfoUrl, homepageUrl, tvdbUrl, hasTvdb };
   }
 
   // Some posts drop a short red-text "Please be advised..."/"Note: ..." callout in its own
@@ -2674,6 +2712,10 @@
     wrapper.className = 'rbb-card rbb-detail-card';
     wrapper.innerHTML = buildCardInnerHtml(data, true, false);
 
+    const lbImageLink = wrapper.querySelector('.rbb-image');
+    const lbImg = lbImageLink?.querySelector('img');
+    if (lbImageLink && lbImg) fitImageAspect(lbImageLink, lbImg);
+
     body.innerHTML = '';
     body.appendChild(wrapper);
     dialog.scrollTop = 0;
@@ -3455,7 +3497,7 @@
       .rbb-image img {
         width: 100%;
         height: 100%;
-        object-fit: cover;
+        object-fit: contain;
         object-position: center top;
         display: block;
         transition: transform .22s ease, opacity .22s ease;
@@ -3753,7 +3795,15 @@
       .rbb-nfo-pill,
       .rbb-nfo-pill:visited,
       .rbb-nfo-pill:hover,
-      .rbb-nfo-pill:active {
+      .rbb-nfo-pill:active,
+      .rbb-homepage-pill,
+      .rbb-homepage-pill:visited,
+      .rbb-homepage-pill:hover,
+      .rbb-homepage-pill:active,
+      .rbb-tvdb-pill,
+      .rbb-tvdb-pill:visited,
+      .rbb-tvdb-pill:hover,
+      .rbb-tvdb-pill:active {
         display: flex;
         align-items: center;
         gap: 6px;
@@ -3780,8 +3830,25 @@
         background: linear-gradient(135deg, #3f3f46, #71717a);
       }
 
+      .rbb-homepage-pill,
+      .rbb-homepage-pill:visited {
+        background: linear-gradient(135deg, #0f5c4a, #1aa383);
+      }
+
+      .rbb-tvdb-pill,
+      .rbb-tvdb-pill:visited {
+        background: linear-gradient(135deg, #5a3d0f, #cc8f1e);
+        cursor: default;
+      }
+
+      .rbb-tvdb-pill[href] {
+        cursor: pointer;
+      }
+
       .rbb-steam-pill:hover,
-      .rbb-nfo-pill:hover {
+      .rbb-nfo-pill:hover,
+      .rbb-homepage-pill:hover,
+      .rbb-tvdb-pill[href]:hover {
         filter: brightness(1.2);
         transform: translateY(-1px);
       }
