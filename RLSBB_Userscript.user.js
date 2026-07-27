@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.7.1
+// @version      2.7.2
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -39,8 +39,8 @@
 // @resource     rbbAudioAtmos https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/audio/atmos.png
 // @resource     rbbWarningDCPRip https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/warning/dcprip.png
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.7.1
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.7.1
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.7.2
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.7.2
 // ==/UserScript==
 
 (function () {
@@ -817,18 +817,17 @@
     const tokens = release.tokens.join(' ');
     const qualityLabel = qualityLabelHtml(primaryQuality);
     const codecLabel = codecLabelHtml(pairedCodec);
+    const mediaIconRow = [qualityLabel, codecLabel, impactIcons].filter(Boolean).join('');
 
     return `
       <div class="rbb-release-row ${isBest ? 'rbb-best-row' : ''}" data-version-tokens="${escAttr(tokens)}">
         <div class="rbb-release-top">
           <div class="rbb-quality-block">
-            ${qualityLabel}
-            ${codecLabel}
-            ${impactIcons}
             <div class="rbb-size-badge">${esc(release.size || 'size unknown')}</div>
           </div>
 
           <div class="rbb-release-main">
+            ${mediaIconRow ? `<div class="rbb-media-icon-row">${mediaIconRow}</div>` : ''}
             <div class="rbb-release-name">${esc(release.name || 'Unknown release')}</div>
             <div class="rbb-release-meta">
               ${release.format ? `<span>${esc(release.format)}</span>` : ''}
@@ -3751,6 +3750,29 @@
         gap: 8px;
       }
 
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-media-icon-row {
+        gap: 4px;
+        margin-bottom: 7px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-quality-label {
+        width: 42px;
+        min-width: 42px;
+        height: 37px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-codec-label {
+        width: 48px;
+        min-width: 48px;
+        height: 34px;
+      }
+
+      .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-impact-label {
+        width: 42px;
+        min-width: 42px;
+        height: 18px;
+      }
+
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-actions {
         padding-top: 7px;
         gap: 6px;
@@ -4236,10 +4258,23 @@
         min-width: 0;
       }
 
+      .rbb-media-icon-row {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 5px 6px;
+        margin: 0 0 8px;
+      }
+
+      .rbb-detail-card .rbb-media-icon-row {
+        gap: 6px 7px;
+        margin-bottom: 10px;
+      }
+
       .rbb-quality-label {
-        width: 76px;
-        min-width: 76px;
-        height: 67px;
+        width: 58px;
+        min-width: 58px;
+        height: 51px;
         text-align: center;
         border-radius: 9px;
         padding: 0;
@@ -4253,9 +4288,9 @@
       }
 
       .rbb-detail-card .rbb-quality-label {
-        width: 94px;
-        min-width: 94px;
-        height: 82px;
+        width: 72px;
+        min-width: 72px;
+        height: 63px;
         padding: 0;
         font-size: 15px;
       }
@@ -4274,9 +4309,9 @@
       }
 
       .rbb-codec-label {
-        width: 76px;
-        min-width: 76px;
-        height: 54px;
+        width: 68px;
+        min-width: 68px;
+        height: 48px;
         display: grid;
         place-items: center;
         overflow: hidden;
@@ -4284,9 +4319,9 @@
       }
 
       .rbb-detail-card .rbb-codec-label {
-        width: 94px;
-        min-width: 94px;
-        height: 66px;
+        width: 82px;
+        min-width: 82px;
+        height: 58px;
       }
 
       .rbb-codec-img {
@@ -4297,9 +4332,9 @@
       }
 
       .rbb-impact-label {
-        width: 76px;
-        min-width: 76px;
-        height: 32px;
+        width: 68px;
+        min-width: 68px;
+        height: 29px;
         display: grid;
         place-items: center;
         overflow: hidden;
@@ -4307,9 +4342,9 @@
       }
 
       .rbb-detail-card .rbb-impact-label {
-        width: 94px;
-        min-width: 94px;
-        height: 40px;
+        width: 82px;
+        min-width: 82px;
+        height: 35px;
       }
 
       .rbb-impact-img {
