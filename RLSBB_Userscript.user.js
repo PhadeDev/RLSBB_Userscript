@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.7
+// @version      2.8.8
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.7
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.7
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.8
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.8
 // ==/UserScript==
 
 (function () {
@@ -668,6 +668,37 @@
     return `<img src="${escAttr(src)}" alt="" data-rbb-artwork-img data-media-kind="${escAttr(kind)}" data-artwork-mode="${escAttr(mode)}" data-rlsbb-src="${escAttr(data.image || '')}" data-placeholder-src="${escAttr(placeholder)}"${classes ? ` class="${escAttr(classes)}"` : ''}>`;
   }
 
+  function displayTitleForData(data, detail = false) {
+    if (detail) return data.title;
+    const cleaned = cleanMediaTitle(data.title, mediaKindForData(data));
+    return cleaned || data.title;
+  }
+
+  function cleanMediaTitle(title, kind) {
+    let text = String(title || '')
+      .replace(/[._]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (!text) return '';
+    if (kind === 'game') {
+      return text
+        .replace(/\b(?:FLT|FCKDRM|RUNE|TENOKE|TiNYiSO|SKIDROW|CODEX|GOG)\b.*$/i, '')
+        .replace(/[-–—]\s*$/g, '')
+        .trim() || text;
+    }
+
+    text = text
+      .replace(/\bS\d{1,2}E\d{1,3}\b.*$/i, '')
+      .replace(/\bS\d{1,2}\b.*$/i, '')
+      .replace(/\b(19\d{2}|20\d{2})\b.*$/i, '')
+      .replace(/\b(?:4320p|2160p|1080p|720p|480p|8K|4K|UHD|HDR10P?|HDR|DV|BluRay|BRRip|WEB[-\s]?DL|WEBRip|HDTV|AMZN|NF|HMAX|DSNP|ATVP|iT|DDP?\d(?:\.\d)?|Atmos|TrueHD|AAC|AC3|H\.?26[45]|x26[45]|HEVC|AV1|Remux|MULTi)\b.*$/i, '')
+      .replace(/[-–—]\s*$/g, '')
+      .trim();
+
+    return text;
+  }
+
   // Builds the card's inner HTML for either context: the compact feed-grid card (detail=false)
   // or the full detail view -- the actual post page, and (via openLightbox) the lightbox modal
   // triggered from a feed card (detail=true either way). `includeCommentsFooter` is kept
@@ -700,6 +731,7 @@
       `
       : '';
     const specStrip = releaseSpecStripHtml(bestRelease);
+    const displayTitle = displayTitleForData(data, detail);
 
     return `
       <a class="rbb-image" href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">
@@ -709,7 +741,7 @@
 
       <div class="rbb-content">
         <h2 class="rbb-card-title">
-          <a href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">${esc(data.title)}</a>
+          <a href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer" title="${escAttr(data.title)}">${esc(displayTitle)}</a>
         </h2>
 
         <div class="rbb-top-meta">
@@ -870,6 +902,7 @@
     const cached = cachedTmdbArtwork(key);
     if (cached?.url) {
       swapArtworkImage(img, imageLink, cached.url);
+      applyTmdbDisplayTitle(card, cached.title);
       return;
     }
     if (cached?.miss) {
@@ -880,11 +913,14 @@
 
     activeArtworkFetches.add(key);
     try {
-      const url = await fetchTmdbArtworkUrl(data, tmdbApiKey, mode);
+      const artwork = await fetchTmdbArtwork(data, tmdbApiKey, mode);
       const cache = getTmdbCache();
-      cache[key] = url ? { url, at: Date.now() } : { miss: true, at: Date.now() };
+      cache[key] = artwork.url ? { ...artwork, at: Date.now() } : { miss: true, at: Date.now() };
       setTmdbCache(cache);
-      if (url) swapArtworkImage(img, imageLink, url);
+      if (artwork.url) {
+        swapArtworkImage(img, imageLink, artwork.url);
+        applyTmdbDisplayTitle(card, artwork.title);
+      }
       else fallbackToRlsbbArtwork(img, imageLink);
     } catch (err) {
       log('TMDB artwork lookup failed:', err?.message || err);
@@ -894,9 +930,9 @@
     }
   }
 
-  async function fetchTmdbArtworkUrl(data, apiKey, mode) {
+  async function fetchTmdbArtwork(data, apiKey, mode) {
     const parsed = parseMediaSearch(data);
-    if (!parsed.query) return '';
+    if (!parsed.query) return { url: '', title: '' };
 
     const endpoint = parsed.kind === 'tv' ? 'tv' : 'movie';
     const params = new URLSearchParams({
@@ -917,14 +953,15 @@
     const wantedPath = mode === 'tmdb-poster' ? 'poster_path' : 'backdrop_path';
     const fallbackPath = '';
     const best = (payload.results || []).find(result => result[wantedPath]) || (fallbackPath ? (payload.results || []).find(result => result[fallbackPath]) : null);
-    if (!best) return '';
+    if (!best) return { url: '', title: '' };
+    const title = cleanText(best.title || best.name || best.original_title || best.original_name || '');
     if (best[wantedPath]) {
       const base = wantedPath === 'backdrop_path' ? TMDB_BACKDROP_IMAGE_BASE : TMDB_POSTER_IMAGE_BASE;
-      return base + best[wantedPath];
+      return { url: base + best[wantedPath], title };
     }
-    if (!fallbackPath) return '';
+    if (!fallbackPath) return { url: '', title };
     const fallbackBase = fallbackPath === 'backdrop_path' ? TMDB_BACKDROP_IMAGE_BASE : TMDB_POSTER_IMAGE_BASE;
-    return best[fallbackPath] ? fallbackBase + best[fallbackPath] : '';
+    return { url: best[fallbackPath] ? fallbackBase + best[fallbackPath] : '', title };
   }
 
   function swapArtworkImage(img, imageLink, url) {
@@ -943,6 +980,14 @@
     const fallback = img.dataset.rlsbbSrc || '';
     if (!fallback || img.src === fallback) return;
     swapArtworkImage(img, imageLink, fallback);
+  }
+
+  function applyTmdbDisplayTitle(card, title) {
+    const cleanTitle = cleanText(title || '');
+    if (!cleanTitle) return;
+    const link = card.querySelector('.rbb-card-title a');
+    if (!link) return;
+    link.textContent = cleanTitle;
   }
 
   function appendArticle(article, grid, doc = document) {
@@ -1065,6 +1110,20 @@
       : '';
 
     const tokens = release.tokens.join(' ');
+    const releaseDetails = detailMode
+      ? `
+          <div class="rbb-release-main">
+            <div class="rbb-release-name">${esc(release.name || 'Unknown release')}</div>
+            <div class="rbb-release-meta">
+              ${release.format ? `<span>${esc(release.format)}</span>` : ''}
+              ${release.audio ? `<span>${esc(release.audio)}</span>` : ''}
+              ${release.runtime ? `<span>${esc(release.runtime)}</span>` : ''}
+            </div>
+            ${release.subtitles ? `<div class="rbb-release-subtitles">Subtitles: ${esc(release.subtitles)}</div>` : ''}
+            ${chips ? `<div class="rbb-release-badges">${chips}</div>` : ''}
+          </div>
+        `
+      : '';
 
     return `
       <div class="rbb-release-row ${isBest ? 'rbb-best-row' : ''}" data-version-tokens="${escAttr(tokens)}">
@@ -1073,16 +1132,7 @@
             <div class="rbb-size-badge">${esc(release.size || 'size unknown')}</div>
           </div>
 
-          <div class="rbb-release-main">
-            <div class="rbb-release-name">${esc(release.name || 'Unknown release')}</div>
-            <div class="rbb-release-meta">
-              ${release.format ? `<span>${esc(release.format)}</span>` : ''}
-              ${release.audio ? `<span>${esc(release.audio)}</span>` : ''}
-              ${detailMode && release.runtime ? `<span>${esc(release.runtime)}</span>` : ''}
-            </div>
-            ${detailMode && release.subtitles ? `<div class="rbb-release-subtitles">Subtitles: ${esc(release.subtitles)}</div>` : ''}
-            ${chips ? `<div class="rbb-release-badges">${chips}</div>` : ''}
-          </div>
+          ${releaseDetails}
         </div>
 
         <div class="rbb-release-actions">
