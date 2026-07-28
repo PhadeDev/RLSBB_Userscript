@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.2
+// @version      2.8.3
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.2
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.2
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.3
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.3
 // ==/UserScript==
 
 (function () {
@@ -629,16 +629,19 @@
   function mediaKindForData(data) {
     const cats = (data.categories || []).join(' ').toLowerCase();
     const title = String(data.title || '');
-    if (/tv|episode|foreign tv|tv packs/.test(cats) || /\bS\d{1,2}(?:E\d{1,2})?\b/i.test(title)) return 'tv';
+    if (/\bgames?\b|\bpc\b|\bmac\b/.test(cats)) return 'game';
+    if (/tv|episode|foreign tv|tv packs/.test(cats) || /\bS\d{1,2}(?:E\d{1,3})?\b/i.test(title)) return 'tv';
     return 'movie';
   }
 
   function artworkModeForKind(kind) {
     const settings = getArtworkSettings();
+    if (kind === 'game') return 'rlsbb';
     return kind === 'tv' ? settings.tvArtworkMode : settings.movieArtworkMode;
   }
 
   function placeholderForKind(kind) {
+    if (kind === 'game') return '';
     return kind === 'tv'
       ? resourceUrl('rbbTvPlaceholder', PLACEHOLDER_FALLBACKS.tv)
       : resourceUrl('rbbMoviePlaceholder', PLACEHOLDER_FALLBACKS.movie);
@@ -656,6 +659,7 @@
     const kind = mediaKindForData(data);
     const placeholder = placeholderForKind(kind);
     const src = artworkInitialUrl(data);
+    if (!src) return `<div class="rbb-no-image">No image</div>`;
     const mode = artworkModeForKind(kind);
     const apiMode = mode !== 'rlsbb';
     return `<img src="${escAttr(src)}" alt="" data-rbb-artwork-img data-media-kind="${escAttr(kind)}" data-artwork-mode="${escAttr(mode)}" data-rlsbb-src="${escAttr(data.image || '')}" data-placeholder-src="${escAttr(placeholder)}"${apiMode ? ' class="rbb-api-artwork"' : ''}>`;
@@ -808,13 +812,13 @@
     const title = String(data.title || '').replace(/\s+/g, ' ').trim();
     const yearMatch = title.match(/\b(19\d{2}|20\d{2})\b/);
     const year = yearMatch ? yearMatch[1] : '';
-    const episodeMatch = title.match(/\bS(\d{1,2})E(\d{1,2})\b/i);
+    const episodeMatch = title.match(/\bS(\d{1,2})E(\d{1,3})\b/i);
     const seasonMatch = !episodeMatch ? title.match(/\bS(\d{1,2})\b/i) : null;
     const scope = episodeMatch ? 'episode' : (seasonMatch ? 'season' : 'title');
     const season = episodeMatch ? episodeMatch[1] : (seasonMatch ? seasonMatch[1] : '');
     const episode = episodeMatch ? episodeMatch[2] : '';
     let query = title
-      .replace(/\bS\d{1,2}E\d{1,2}\b.*$/i, '')
+      .replace(/\bS\d{1,2}E\d{1,3}\b.*$/i, '')
       .replace(/\bS\d{1,2}\b.*$/i, '')
       .replace(/\b(19\d{2}|20\d{2})\b.*$/i, '')
       .replace(/\b(4320p|2160p|1080p|720p|480p|4k|8k|uhd|bluray|brrip|web[-.\s]?dl|webrip|hdr10p?|hdr|dv|h\.?26[45]|x26[45]|hevc|av1|remux|multi)\b.*$/i, '')
@@ -865,7 +869,11 @@
       swapArtworkImage(img, imageLink, cached.url);
       return;
     }
-    if (cached?.miss || activeArtworkFetches.has(key)) return;
+    if (cached?.miss) {
+      fallbackToRlsbbArtwork(img, imageLink);
+      return;
+    }
+    if (activeArtworkFetches.has(key)) return;
 
     activeArtworkFetches.add(key);
     try {
@@ -874,8 +882,10 @@
       cache[key] = url ? { url, at: Date.now() } : { miss: true, at: Date.now() };
       setTmdbCache(cache);
       if (url) swapArtworkImage(img, imageLink, url);
+      else fallbackToRlsbbArtwork(img, imageLink);
     } catch (err) {
       log('TMDB artwork lookup failed:', err?.message || err);
+      fallbackToRlsbbArtwork(img, imageLink);
     } finally {
       activeArtworkFetches.delete(key);
     }
@@ -902,13 +912,14 @@
 
     const payload = JSON.parse(response.responseText || '{}');
     const wantedPath = mode === 'tmdb-backdrop' ? 'backdrop_path' : 'poster_path';
-    const fallbackPath = mode === 'tmdb-backdrop' ? 'poster_path' : 'backdrop_path';
-    const best = (payload.results || []).find(result => result[wantedPath]) || (payload.results || []).find(result => result[fallbackPath]) || null;
+    const fallbackPath = mode === 'tmdb-backdrop' ? '' : 'backdrop_path';
+    const best = (payload.results || []).find(result => result[wantedPath]) || (fallbackPath ? (payload.results || []).find(result => result[fallbackPath]) : null);
     if (!best) return '';
     if (best[wantedPath]) {
       const base = wantedPath === 'backdrop_path' ? TMDB_BACKDROP_IMAGE_BASE : TMDB_POSTER_IMAGE_BASE;
       return base + best[wantedPath];
     }
+    if (!fallbackPath) return '';
     const fallbackBase = fallbackPath === 'backdrop_path' ? TMDB_BACKDROP_IMAGE_BASE : TMDB_POSTER_IMAGE_BASE;
     return best[fallbackPath] ? fallbackBase + best[fallbackPath] : '';
   }
@@ -923,6 +934,12 @@
     }, { once: true });
     img.classList.add('rbb-api-artwork');
     img.src = url;
+  }
+
+  function fallbackToRlsbbArtwork(img, imageLink) {
+    const fallback = img.dataset.rlsbbSrc || '';
+    if (!fallback || img.src === fallback) return;
+    swapArtworkImage(img, imageLink, fallback);
   }
 
   function appendArticle(article, grid, doc = document) {
