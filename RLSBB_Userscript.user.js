@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.1
+// @version      2.8.2
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.1
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.1
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.2
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.2
 // ==/UserScript==
 
 (function () {
@@ -43,7 +43,8 @@
   const TMDB_CACHE_KEY = 'tmdbArtworkCache.v1';
   const TMDB_CACHE_MAX_AGE = 90 * 24 * 60 * 60 * 1000;
   const TMDB_MISS_MAX_AGE = 14 * 24 * 60 * 60 * 1000;
-  const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
+  const TMDB_POSTER_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
+  const TMDB_BACKDROP_IMAGE_BASE = 'https://image.tmdb.org/t/p/w780';
   const PLACEHOLDER_FALLBACKS = {
     movie: 'https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/placeholders/movie.png',
     tv: 'https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/placeholders/tv.png'
@@ -203,9 +204,15 @@
   }
 
   function getArtworkSettings() {
-    const mode = getSetting('artworkMode', 'rlsbb');
+    const legacyMode = getSetting('artworkMode', 'rlsbb');
+    const movieMode = getSetting('movieArtworkMode', legacyMode);
+    // If the short-lived single global mode was set to TMDB, keep the useful part for movies
+    // but move TV back to RLSBB by default. TMDB TV posters are portrait, not banner art.
+    const tvFallback = legacyMode === 'placeholder' ? 'placeholder' : 'rlsbb';
+    const tvMode = getSetting('tvArtworkMode', tvFallback);
     return {
-      artworkMode: ['rlsbb', 'tmdb', 'placeholder'].includes(mode) ? mode : 'rlsbb',
+      movieArtworkMode: ['rlsbb', 'tmdb', 'placeholder'].includes(movieMode) ? movieMode : 'rlsbb',
+      tvArtworkMode: ['rlsbb', 'tmdb-poster', 'tmdb-backdrop', 'placeholder'].includes(tvMode) ? tvMode : 'rlsbb',
       tmdbApiKey: getSetting('tmdbApiKey', '')
     };
   }
@@ -622,8 +629,13 @@
   function mediaKindForData(data) {
     const cats = (data.categories || []).join(' ').toLowerCase();
     const title = String(data.title || '');
-    if (/tv|episode|foreign tv|tv packs/.test(cats) || /\bS\d{1,2}E\d{1,2}\b/i.test(title)) return 'tv';
+    if (/tv|episode|foreign tv|tv packs/.test(cats) || /\bS\d{1,2}(?:E\d{1,2})?\b/i.test(title)) return 'tv';
     return 'movie';
+  }
+
+  function artworkModeForKind(kind) {
+    const settings = getArtworkSettings();
+    return kind === 'tv' ? settings.tvArtworkMode : settings.movieArtworkMode;
   }
 
   function placeholderForKind(kind) {
@@ -635,7 +647,7 @@
   function artworkInitialUrl(data) {
     const kind = mediaKindForData(data);
     const placeholder = placeholderForKind(kind);
-    const { artworkMode } = getArtworkSettings();
+    const artworkMode = artworkModeForKind(kind);
     if (artworkMode === 'rlsbb') return data.image || placeholder;
     return placeholder;
   }
@@ -644,7 +656,9 @@
     const kind = mediaKindForData(data);
     const placeholder = placeholderForKind(kind);
     const src = artworkInitialUrl(data);
-    return `<img src="${escAttr(src)}" alt="" data-rbb-artwork-img data-media-kind="${escAttr(kind)}" data-rlsbb-src="${escAttr(data.image || '')}" data-placeholder-src="${escAttr(placeholder)}">`;
+    const mode = artworkModeForKind(kind);
+    const apiMode = mode !== 'rlsbb';
+    return `<img src="${escAttr(src)}" alt="" data-rbb-artwork-img data-media-kind="${escAttr(kind)}" data-artwork-mode="${escAttr(mode)}" data-rlsbb-src="${escAttr(data.image || '')}" data-placeholder-src="${escAttr(placeholder)}"${apiMode ? ' class="rbb-api-artwork"' : ''}>`;
   }
 
   // Builds the card's inner HTML for either context: the compact feed-grid card (detail=false)
@@ -765,8 +779,9 @@
   const activeArtworkFetches = new Set();
 
   function observeArtworkCard(card, data, immediate = false) {
-    const { artworkMode, tmdbApiKey } = getArtworkSettings();
-    if (artworkMode !== 'tmdb' || !tmdbApiKey) return;
+    const { tmdbApiKey } = getArtworkSettings();
+    const mode = artworkModeForKind(mediaKindForData(data));
+    if (!mode.startsWith('tmdb') || !tmdbApiKey) return;
 
     artworkDataByCard.set(card, data);
     if (immediate || isPostPage) {
@@ -793,20 +808,27 @@
     const title = String(data.title || '').replace(/\s+/g, ' ').trim();
     const yearMatch = title.match(/\b(19\d{2}|20\d{2})\b/);
     const year = yearMatch ? yearMatch[1] : '';
+    const episodeMatch = title.match(/\bS(\d{1,2})E(\d{1,2})\b/i);
+    const seasonMatch = !episodeMatch ? title.match(/\bS(\d{1,2})\b/i) : null;
+    const scope = episodeMatch ? 'episode' : (seasonMatch ? 'season' : 'title');
+    const season = episodeMatch ? episodeMatch[1] : (seasonMatch ? seasonMatch[1] : '');
+    const episode = episodeMatch ? episodeMatch[2] : '';
     let query = title
       .replace(/\bS\d{1,2}E\d{1,2}\b.*$/i, '')
+      .replace(/\bS\d{1,2}\b.*$/i, '')
       .replace(/\b(19\d{2}|20\d{2})\b.*$/i, '')
       .replace(/\b(4320p|2160p|1080p|720p|480p|4k|8k|uhd|bluray|brrip|web[-.\s]?dl|webrip|hdr10p?|hdr|dv|h\.?26[45]|x26[45]|hevc|av1|remux|multi)\b.*$/i, '')
       .replace(/[._-]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
     if (!query) query = title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, '').trim() || title;
-    return { kind: mediaKindForData(data), query, year };
+    return { kind: mediaKindForData(data), query, year, scope, season, episode };
   }
 
   function tmdbCacheKey(data) {
     const parsed = parseMediaSearch(data);
-    return [parsed.kind, parsed.query.toLowerCase(), parsed.year || ''].join('|');
+    const mode = artworkModeForKind(parsed.kind);
+    return [parsed.kind, mode, parsed.query.toLowerCase(), parsed.year || '', parsed.scope, parsed.season || ''].join('|');
   }
 
   function getTmdbCache() {
@@ -833,8 +855,9 @@
     const imageLink = card.querySelector('.rbb-image');
     if (!img || !imageLink) return;
 
-    const { artworkMode, tmdbApiKey } = getArtworkSettings();
-    if (artworkMode !== 'tmdb' || !tmdbApiKey) return;
+    const { tmdbApiKey } = getArtworkSettings();
+    const mode = artworkModeForKind(mediaKindForData(data));
+    if (!mode.startsWith('tmdb') || !tmdbApiKey) return;
 
     const key = tmdbCacheKey(data);
     const cached = cachedTmdbArtwork(key);
@@ -846,7 +869,7 @@
 
     activeArtworkFetches.add(key);
     try {
-      const url = await fetchTmdbPosterUrl(data, tmdbApiKey);
+      const url = await fetchTmdbArtworkUrl(data, tmdbApiKey, mode);
       const cache = getTmdbCache();
       cache[key] = url ? { url, at: Date.now() } : { miss: true, at: Date.now() };
       setTmdbCache(cache);
@@ -858,7 +881,7 @@
     }
   }
 
-  async function fetchTmdbPosterUrl(data, apiKey) {
+  async function fetchTmdbArtworkUrl(data, apiKey, mode) {
     const parsed = parseMediaSearch(data);
     if (!parsed.query) return '';
 
@@ -878,8 +901,16 @@
     if (response.status < 200 || response.status >= 300) throw new Error(`TMDB HTTP ${response.status}`);
 
     const payload = JSON.parse(response.responseText || '{}');
-    const best = (payload.results || []).find(result => result.poster_path) || null;
-    return best?.poster_path ? TMDB_IMAGE_BASE + best.poster_path : '';
+    const wantedPath = mode === 'tmdb-backdrop' ? 'backdrop_path' : 'poster_path';
+    const fallbackPath = mode === 'tmdb-backdrop' ? 'poster_path' : 'backdrop_path';
+    const best = (payload.results || []).find(result => result[wantedPath]) || (payload.results || []).find(result => result[fallbackPath]) || null;
+    if (!best) return '';
+    if (best[wantedPath]) {
+      const base = wantedPath === 'backdrop_path' ? TMDB_BACKDROP_IMAGE_BASE : TMDB_POSTER_IMAGE_BASE;
+      return base + best[wantedPath];
+    }
+    const fallbackBase = fallbackPath === 'backdrop_path' ? TMDB_BACKDROP_IMAGE_BASE : TMDB_POSTER_IMAGE_BASE;
+    return best[fallbackPath] ? fallbackBase + best[fallbackPath] : '';
   }
 
   function swapArtworkImage(img, imageLink, url) {
@@ -890,6 +921,7 @@
       img.classList.remove('rbb-artwork-loading');
       img.classList.add('rbb-artwork-loaded');
     }, { once: true });
+    img.classList.add('rbb-api-artwork');
     img.src = url;
   }
 
@@ -3060,10 +3092,19 @@
           <form class="rbb-settings-form">
             <h3 class="rbb-settings-section-title">Artwork</h3>
             <label class="rbb-settings-field">
-              <span>Artwork mode</span>
-              <select name="artworkMode">
+              <span>Movie artwork</span>
+              <select name="movieArtworkMode">
                 <option value="rlsbb">RLSBB images (default)</option>
                 <option value="tmdb">TMDB artwork, placeholder while loading</option>
+                <option value="placeholder">Placeholders only</option>
+              </select>
+            </label>
+            <label class="rbb-settings-field">
+              <span>TV artwork</span>
+              <select name="tvArtworkMode">
+                <option value="rlsbb">RLSBB images (default)</option>
+                <option value="tmdb-backdrop">TMDB backdrop, placeholder while loading</option>
+                <option value="tmdb-poster">TMDB poster, placeholder while loading</option>
                 <option value="placeholder">Placeholders only</option>
               </select>
             </label>
@@ -3125,7 +3166,8 @@
       event.preventDefault();
       const form = event.currentTarget;
       const fields = form.elements;
-      setSetting('artworkMode', fields.artworkMode.value);
+      setSetting('movieArtworkMode', fields.movieArtworkMode.value);
+      setSetting('tvArtworkMode', fields.tvArtworkMode.value);
       setSetting('tmdbApiKey', fields.tmdbApiKey.value.trim());
       setSetting('allDebridKey', fields.allDebridKey.value.trim());
       setSetting('aria2Rpc', fields.aria2Rpc.value.trim());
@@ -3151,7 +3193,8 @@
     const artworkSettings = getArtworkSettings();
     const form = dialog.querySelector('.rbb-settings-form');
     const fields = form.elements;
-    fields.artworkMode.value = artworkSettings.artworkMode;
+    fields.movieArtworkMode.value = artworkSettings.movieArtworkMode;
+    fields.tvArtworkMode.value = artworkSettings.tvArtworkMode;
     fields.tmdbApiKey.value = artworkSettings.tmdbApiKey;
     fields.allDebridKey.value = settings.allDebridKey;
     fields.aria2Rpc.value = settings.aria2Rpc;
@@ -4025,6 +4068,11 @@
         display: block;
         transition: transform .22s ease, opacity .22s ease;
         background: #071019;
+      }
+
+      .rbb-image img.rbb-api-artwork {
+        object-fit: cover;
+        object-position: center center;
       }
 
       .rbb-card:hover .rbb-image img {
