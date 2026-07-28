@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.9
+// @version      2.8.10
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.9
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.9
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.10
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.10
 // ==/UserScript==
 
 (function () {
@@ -691,6 +691,7 @@
     const tvToken = kind === 'tv'
       ? (text.match(/\bS\d{1,2}E\d{1,3}\b/i)?.[0]?.toUpperCase() || text.match(/\bS\d{1,2}\b/i)?.[0]?.toUpperCase() || '')
       : '';
+    const movieYear = kind === 'movie' ? (text.match(/\b(19\d{2}|20\d{2})\b/)?.[1] || '') : '';
 
     text = text
       .replace(/\bS\d{1,2}E\d{1,3}\b.*$/i, '')
@@ -700,6 +701,7 @@
       .replace(/[-–—]\s*$/g, '')
       .trim();
 
+    if (kind === 'movie' && movieYear && text) return `${text} (${movieYear})`;
     return [text, tvToken].filter(Boolean).join(' ');
   }
 
@@ -3941,6 +3943,8 @@
         align-items: center;
         justify-content: center;
         border-radius: 6px;
+        border: 1px solid rgba(255,255,255,.24);
+        box-shadow: 0 5px 12px rgba(0,0,0,.38), inset 0 1px 0 rgba(255,255,255,.18);
         line-height: 1;
         white-space: nowrap;
       }
@@ -4002,7 +4006,7 @@
 
       .rbb-spec-chip-codec {
         background: rgba(4, 8, 13, .58);
-        border: 1.5px solid oklch(1 0 0 / 0.18);
+        border-color: oklch(1 0 0 / 0.24);
         color: oklch(0.88 0.01 260);
         font-size: 12.5px;
         font-weight: 700;
@@ -4565,6 +4569,13 @@
         border: 1px solid rgba(255,255,255,.07);
       }
 
+      .rbb-card:not(.rbb-detail-card) .rbb-release-row {
+        display: grid;
+        grid-template-columns: minmax(76px, auto) minmax(0, 1fr);
+        align-items: center;
+        gap: 10px;
+      }
+
       .rbb-detail-card .rbb-release-row {
         gap: 14px;
         padding: 16px;
@@ -4583,6 +4594,10 @@
       }
 
       .rbb-detail-card .rbb-release-top { gap: 16px; }
+
+      .rbb-card:not(.rbb-detail-card) .rbb-release-top {
+        min-width: 0;
+      }
 
       .rbb-quality-block {
         flex: 0 0 auto;
@@ -4700,6 +4715,12 @@
         gap: 8px;
         padding-top: 10px;
         border-top: 1px solid rgba(255,255,255,.07);
+      }
+
+      .rbb-card:not(.rbb-detail-card) .rbb-release-actions {
+        min-width: 0;
+        padding-top: 0;
+        border-top: 0;
       }
 
       .rbb-detail-card .rbb-release-actions { padding-top: 12px; gap: 10px; }
@@ -5321,7 +5342,7 @@
           padding: 11px 12px 12px;
         }
 
-        .rbb-release-rg {
+        .rbb-detail-card .rbb-release-rg {
           flex-direction: column;
         }
       }
