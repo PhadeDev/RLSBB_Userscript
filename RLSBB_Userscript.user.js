@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.4
+// @version      2.8.5
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.4
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.4
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.5
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.5
 // ==/UserScript==
 
 (function () {
@@ -205,13 +205,14 @@
 
   function getArtworkSettings() {
     const legacyMode = getSetting('artworkMode', 'rlsbb');
-    const movieMode = getSetting('movieArtworkMode', legacyMode);
+    let movieMode = getSetting('movieArtworkMode', legacyMode);
+    if (movieMode === 'tmdb-backdrop') movieMode = 'tmdb';
     // If the short-lived single global mode was set to TMDB, keep the useful part for movies
     // but move TV back to RLSBB by default. TMDB TV posters are portrait, not banner art.
     const tvFallback = legacyMode === 'placeholder' ? 'placeholder' : 'rlsbb';
     const tvMode = getSetting('tvArtworkMode', tvFallback);
     return {
-      movieArtworkMode: ['rlsbb', 'tmdb', 'tmdb-backdrop', 'placeholder'].includes(movieMode) ? movieMode : 'rlsbb',
+      movieArtworkMode: ['rlsbb', 'tmdb', 'placeholder'].includes(movieMode) ? movieMode : 'rlsbb',
       tvArtworkMode: ['rlsbb', 'tmdb-poster', 'tmdb-backdrop', 'placeholder'].includes(tvMode) ? tvMode : 'rlsbb',
       tmdbApiKey: getSetting('tmdbApiKey', '')
     };
@@ -662,7 +663,7 @@
     if (!src) return `<div class="rbb-no-image">No image</div>`;
     const mode = artworkModeForKind(kind);
     const apiMode = mode !== 'rlsbb';
-    const fixedClass = mode === 'tmdb-backdrop' ? 'rbb-fixed-backdrop-artwork' : ((mode === 'tmdb' || mode === 'tmdb-poster') ? 'rbb-fixed-poster-artwork' : '');
+    const fixedClass = 'rbb-fixed-backdrop-artwork';
     const classes = [apiMode ? 'rbb-api-artwork' : '', fixedClass].filter(Boolean).join(' ');
     return `<img src="${escAttr(src)}" alt="" data-rbb-artwork-img data-media-kind="${escAttr(kind)}" data-artwork-mode="${escAttr(mode)}" data-rlsbb-src="${escAttr(data.image || '')}" data-placeholder-src="${escAttr(placeholder)}"${classes ? ` class="${escAttr(classes)}"` : ''}>`;
   }
@@ -701,9 +702,8 @@
     const specStrip = releaseSpecStripHtml(bestRelease);
 
     return `
-      ${specStrip}
-
       <a class="rbb-image" href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">
+        ${specStrip}
         ${imageHtmlForData(data)}
       </a>
 
@@ -763,20 +763,18 @@
       const h = img.naturalHeight;
       if (!w || !h) return;
       const rawRatio = w / h;
-      const fixedBackdrop = img.classList.contains('rbb-fixed-backdrop-artwork');
-      const fixedPoster = img.classList.contains('rbb-fixed-poster-artwork');
       const ratio = Math.min(3.4, Math.max(0.55, rawRatio));
       const card = container.closest('.rbb-card');
-      const displayRatio = fixedBackdrop ? 16 / 6 : (fixedPoster ? 2 / 3 : ratio);
+      const displayRatio = 16 / 6;
       container.style.aspectRatio = `${displayRatio} / 1`;
       container.style.setProperty('--rbb-img-ratio', `${displayRatio} / 1`);
-      container.classList.toggle('rbb-image-portrait', !fixedBackdrop && (fixedPoster || rawRatio < 0.85));
-      container.classList.toggle('rbb-image-landscape', fixedBackdrop || (!fixedPoster && rawRatio >= 0.85));
-      container.classList.toggle('rbb-image-wide', fixedBackdrop || (!fixedPoster && rawRatio >= 2.1));
+      container.classList.toggle('rbb-image-portrait', false);
+      container.classList.toggle('rbb-image-landscape', true);
+      container.classList.toggle('rbb-image-wide', true);
       if (card) {
-        card.classList.toggle('rbb-card-portrait-media', !fixedBackdrop && (fixedPoster || rawRatio < 0.85));
-        card.classList.toggle('rbb-card-landscape-media', fixedBackdrop || (!fixedPoster && rawRatio >= 0.85));
-        card.classList.toggle('rbb-card-wide-media', fixedBackdrop || (!fixedPoster && rawRatio >= 2.1));
+        card.classList.toggle('rbb-card-portrait-media', false);
+        card.classList.toggle('rbb-card-landscape-media', true);
+        card.classList.toggle('rbb-card-wide-media', true);
       }
     };
     if (img.complete && img.naturalWidth) apply();
@@ -916,8 +914,8 @@
     if (response.status < 200 || response.status >= 300) throw new Error(`TMDB HTTP ${response.status}`);
 
     const payload = JSON.parse(response.responseText || '{}');
-    const wantedPath = mode === 'tmdb-backdrop' ? 'backdrop_path' : 'poster_path';
-    const fallbackPath = mode === 'tmdb-backdrop' ? '' : 'backdrop_path';
+    const wantedPath = mode === 'tmdb-poster' ? 'poster_path' : 'backdrop_path';
+    const fallbackPath = '';
     const best = (payload.results || []).find(result => result[wantedPath]) || (fallbackPath ? (payload.results || []).find(result => result[fallbackPath]) : null);
     if (!best) return '';
     if (best[wantedPath]) {
@@ -3117,8 +3115,7 @@
               <span>Movie artwork</span>
               <select name="movieArtworkMode">
                 <option value="rlsbb">RLSBB images (default)</option>
-                <option value="tmdb">TMDB poster, placeholder while loading</option>
-                <option value="tmdb-backdrop">TMDB backdrop, placeholder while loading</option>
+                <option value="tmdb">TMDB backdrop, placeholder while loading</option>
                 <option value="placeholder">Placeholders only</option>
               </select>
             </label>
@@ -3874,10 +3871,15 @@
         display: flex;
         align-items: center;
         gap: 7px;
-        padding: 10px 12px;
-        background: oklch(0.17 0.013 260);
-        border-bottom: 1px solid oklch(1 0 0 / 0.06);
+        position: absolute;
+        z-index: 3;
+        top: 8px;
+        left: 8px;
+        padding: 0;
+        background: transparent;
+        border: 0;
         min-width: 0;
+        pointer-events: none;
       }
 
       .rbb-spec-chip {
@@ -3945,7 +3947,7 @@
       }
 
       .rbb-spec-chip-codec {
-        background: transparent;
+        background: rgba(4, 8, 13, .72);
         border: 1.5px solid oklch(1 0 0 / 0.22);
         color: oklch(0.88 0.01 260);
         font-size: 12.5px;
@@ -3965,6 +3967,7 @@
 
       /* dense grid card is the default; .rbb-detail-card (post page + lightbox) restores the spacious layout */
       .rbb-image {
+        position: relative;
         display: flex;
         align-items: center;
         justify-content: center;
