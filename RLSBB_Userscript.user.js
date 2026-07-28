@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.11
+// @version      2.8.12
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.11
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.11
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.12
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.12
 // ==/UserScript==
 
 (function () {
@@ -908,7 +908,7 @@
     const cached = cachedTmdbArtwork(key);
     if (cached?.url) {
       swapArtworkImage(img, imageLink, cached.url);
-      applyTmdbDisplayTitle(card, cached.title);
+      applyTmdbDisplayTitle(card, data, cached);
       return;
     }
     if (cached?.miss) {
@@ -925,7 +925,7 @@
       setTmdbCache(cache);
       if (artwork.url) {
         swapArtworkImage(img, imageLink, artwork.url);
-        applyTmdbDisplayTitle(card, artwork.title);
+        applyTmdbDisplayTitle(card, data, artwork);
       }
       else fallbackToRlsbbArtwork(img, imageLink);
     } catch (err) {
@@ -961,13 +961,15 @@
     const best = (payload.results || []).find(result => result[wantedPath]) || (fallbackPath ? (payload.results || []).find(result => result[fallbackPath]) : null);
     if (!best) return { url: '', title: '' };
     const title = cleanText(best.title || best.name || best.original_title || best.original_name || '');
+    const resultYear = String(best.release_date || best.first_air_date || '').match(/\b(19\d{2}|20\d{2})\b/)?.[1] || parsed.year || '';
+    const displayTitle = tmdbDisplayTitle(title, parsed, resultYear);
     if (best[wantedPath]) {
       const base = wantedPath === 'backdrop_path' ? TMDB_BACKDROP_IMAGE_BASE : TMDB_POSTER_IMAGE_BASE;
-      return { url: base + best[wantedPath], title };
+      return { url: base + best[wantedPath], title, year: resultYear, displayTitle };
     }
-    if (!fallbackPath) return { url: '', title };
+    if (!fallbackPath) return { url: '', title, year: resultYear, displayTitle };
     const fallbackBase = fallbackPath === 'backdrop_path' ? TMDB_BACKDROP_IMAGE_BASE : TMDB_POSTER_IMAGE_BASE;
-    return { url: best[fallbackPath] ? fallbackBase + best[fallbackPath] : '', title };
+    return { url: best[fallbackPath] ? fallbackBase + best[fallbackPath] : '', title, year: resultYear, displayTitle };
   }
 
   function swapArtworkImage(img, imageLink, url) {
@@ -988,8 +990,22 @@
     swapArtworkImage(img, imageLink, fallback);
   }
 
-  function applyTmdbDisplayTitle(card, title) {
+  function tmdbDisplayTitle(title, parsed, year) {
     const cleanTitle = cleanText(title || '');
+    if (!cleanTitle) return '';
+    if (parsed.kind === 'movie' && year) return `${cleanTitle} (${year})`;
+    if (parsed.kind === 'tv') {
+      const tvToken = parsed.scope === 'episode'
+        ? `S${String(parsed.season).padStart(2, '0')}E${String(parsed.episode).padStart(2, '0')}`
+        : (parsed.scope === 'season' ? `S${String(parsed.season).padStart(2, '0')}` : '');
+      return [cleanTitle, tvToken].filter(Boolean).join(' ');
+    }
+    return cleanTitle;
+  }
+
+  function applyTmdbDisplayTitle(card, data, artwork) {
+    const parsed = parseMediaSearch(data);
+    const cleanTitle = cleanText(artwork?.displayTitle || tmdbDisplayTitle(artwork?.title || '', parsed, artwork?.year || parsed.year));
     if (!cleanTitle) return;
     const link = card.querySelector('.rbb-card-title a');
     if (!link) return;
