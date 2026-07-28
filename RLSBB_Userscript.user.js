@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.8
+// @version      2.8.9
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.8
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.8
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.9
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.9
 // ==/UserScript==
 
 (function () {
@@ -688,6 +688,10 @@
         .trim() || text;
     }
 
+    const tvToken = kind === 'tv'
+      ? (text.match(/\bS\d{1,2}E\d{1,3}\b/i)?.[0]?.toUpperCase() || text.match(/\bS\d{1,2}\b/i)?.[0]?.toUpperCase() || '')
+      : '';
+
     text = text
       .replace(/\bS\d{1,2}E\d{1,3}\b.*$/i, '')
       .replace(/\bS\d{1,2}\b.*$/i, '')
@@ -696,7 +700,7 @@
       .replace(/[-–—]\s*$/g, '')
       .trim();
 
-    return text;
+    return [text, tvToken].filter(Boolean).join(' ');
   }
 
   // Builds the card's inner HTML for either context: the compact feed-grid card (detail=false)
@@ -1100,7 +1104,7 @@
 
     // Feed cards only have room for a couple of icons; the detail view (post page/lightbox)
     // has the space to show every screenshot/NFO/subtitle link the post actually had.
-    const shownExtraLinks = detailMode ? release.extraLinks : release.extraLinks.slice(0, 2);
+    const shownExtraLinks = detailMode ? release.extraLinks : [];
     const extras = shownExtraLinks.length
       ? shownExtraLinks.map(link => `
         <a class="rbb-mini-extra" href="${escAttr(link.href)}" target="_blank" rel="noopener noreferrer" title="${escAttr(link.label)}">
@@ -4706,9 +4710,28 @@
         gap: 10px;
       }
 
+      .rbb-card:not(.rbb-detail-card) .rbb-release-rg {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 8px;
+      }
+
       .rbb-release-rg .rbb-dl-btn,
       .rbb-release-rg .rbb-dl-protected {
         flex: 1;
+        min-width: 0;
+      }
+
+      .rbb-card:not(.rbb-detail-card) .rbb-dl-btn,
+      .rbb-card:not(.rbb-detail-card) .rbb-dl-protected {
+        min-height: 36px;
+        padding: 7px 8px;
+      }
+
+      .rbb-card:not(.rbb-detail-card) .rbb-dl-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
       .rbb-rg-action {
