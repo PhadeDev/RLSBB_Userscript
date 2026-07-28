@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.10
+// @version      2.8.11
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.10
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.10
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.11
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.11
 // ==/UserScript==
 
 (function () {
@@ -4745,9 +4745,13 @@
 
       .rbb-card:not(.rbb-detail-card) .rbb-dl-btn,
       .rbb-card:not(.rbb-detail-card) .rbb-dl-protected {
-        min-height: 36px;
-        padding: 7px 8px;
+        min-height: 28px;
+        padding: 5px 8px;
+        border-radius: 8px;
       }
+
+      .rbb-card:not(.rbb-detail-card) .rbb-dl-icon { font-size: 13px; }
+      .rbb-card:not(.rbb-detail-card) .rbb-dl-label { font-size: 11px; }
 
       .rbb-card:not(.rbb-detail-card) .rbb-dl-label {
         min-width: 0;
