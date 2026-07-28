@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.6
+// @version      2.8.7
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.6
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.6
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.7
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.7
 // ==/UserScript==
 
 (function () {
@@ -3892,8 +3892,8 @@
       }
 
       .rbb-spec-chip-720p {
-        background: oklch(0.4 0.015 255);
-        color: oklch(0.88 0.01 255);
+        background: oklch(0.42 0.08 220 / 0.78);
+        color: #eef8ff;
         font-size: 13px;
         font-weight: 800;
         letter-spacing: 0.01em;
@@ -3901,8 +3901,8 @@
       }
 
       .rbb-spec-chip-480p {
-        background: oklch(0.32 0.012 255);
-        color: oklch(0.78 0.01 255);
+        background: oklch(0.32 0.012 255 / 0.76);
+        color: #e7eef7;
         font-size: 13px;
         font-weight: 800;
         letter-spacing: 0.01em;
@@ -3910,8 +3910,8 @@
       }
 
       .rbb-spec-chip-1080p {
-        background: oklch(0.62 0.14 235);
-        color: oklch(0.13 0.02 260);
+        background: oklch(0.58 0.14 235 / 0.78);
+        color: #f2fbff;
         font-size: 13px;
         font-weight: 800;
         letter-spacing: 0.01em;
@@ -3919,7 +3919,7 @@
       }
 
       .rbb-spec-chip-4k {
-        background: oklch(0.75 0.14 80);
+        background: oklch(0.75 0.14 80 / 0.78);
         color: oklch(0.16 0.02 80);
         font-size: 13px;
         font-weight: 800;
@@ -3928,7 +3928,7 @@
       }
 
       .rbb-spec-chip-8k {
-        background: oklch(0.84 0.13 95);
+        background: oklch(0.84 0.13 95 / 0.78);
         color: oklch(0.16 0.02 80);
         font-size: 13px;
         font-weight: 800;
@@ -3938,7 +3938,7 @@
       }
 
       .rbb-spec-chip-premium {
-        background: oklch(0.32 0.06 70 / 0.55);
+        background: oklch(0.32 0.06 70 / 0.48);
         border: 1px solid oklch(0.75 0.15 70 / 0.55);
         color: oklch(0.9 0.08 70);
         font-size: 12.5px;
@@ -3947,8 +3947,8 @@
       }
 
       .rbb-spec-chip-codec {
-        background: rgba(4, 8, 13, .72);
-        border: 1.5px solid oklch(1 0 0 / 0.22);
+        background: rgba(4, 8, 13, .58);
+        border: 1.5px solid oklch(1 0 0 / 0.18);
         color: oklch(0.88 0.01 260);
         font-size: 12.5px;
         font-weight: 700;
