@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.3
+// @version      2.8.4
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.3
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.3
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.4
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.4
 // ==/UserScript==
 
 (function () {
@@ -211,7 +211,7 @@
     const tvFallback = legacyMode === 'placeholder' ? 'placeholder' : 'rlsbb';
     const tvMode = getSetting('tvArtworkMode', tvFallback);
     return {
-      movieArtworkMode: ['rlsbb', 'tmdb', 'placeholder'].includes(movieMode) ? movieMode : 'rlsbb',
+      movieArtworkMode: ['rlsbb', 'tmdb', 'tmdb-backdrop', 'placeholder'].includes(movieMode) ? movieMode : 'rlsbb',
       tvArtworkMode: ['rlsbb', 'tmdb-poster', 'tmdb-backdrop', 'placeholder'].includes(tvMode) ? tvMode : 'rlsbb',
       tmdbApiKey: getSetting('tmdbApiKey', '')
     };
@@ -662,7 +662,9 @@
     if (!src) return `<div class="rbb-no-image">No image</div>`;
     const mode = artworkModeForKind(kind);
     const apiMode = mode !== 'rlsbb';
-    return `<img src="${escAttr(src)}" alt="" data-rbb-artwork-img data-media-kind="${escAttr(kind)}" data-artwork-mode="${escAttr(mode)}" data-rlsbb-src="${escAttr(data.image || '')}" data-placeholder-src="${escAttr(placeholder)}"${apiMode ? ' class="rbb-api-artwork"' : ''}>`;
+    const fixedClass = mode === 'tmdb-backdrop' ? 'rbb-fixed-backdrop-artwork' : ((mode === 'tmdb' || mode === 'tmdb-poster') ? 'rbb-fixed-poster-artwork' : '');
+    const classes = [apiMode ? 'rbb-api-artwork' : '', fixedClass].filter(Boolean).join(' ');
+    return `<img src="${escAttr(src)}" alt="" data-rbb-artwork-img data-media-kind="${escAttr(kind)}" data-artwork-mode="${escAttr(mode)}" data-rlsbb-src="${escAttr(data.image || '')}" data-placeholder-src="${escAttr(placeholder)}"${classes ? ` class="${escAttr(classes)}"` : ''}>`;
   }
 
   // Builds the card's inner HTML for either context: the compact feed-grid card (detail=false)
@@ -761,17 +763,20 @@
       const h = img.naturalHeight;
       if (!w || !h) return;
       const rawRatio = w / h;
+      const fixedBackdrop = img.classList.contains('rbb-fixed-backdrop-artwork');
+      const fixedPoster = img.classList.contains('rbb-fixed-poster-artwork');
       const ratio = Math.min(3.4, Math.max(0.55, rawRatio));
       const card = container.closest('.rbb-card');
-      container.style.aspectRatio = `${ratio} / 1`;
-      container.style.setProperty('--rbb-img-ratio', `${ratio} / 1`);
-      container.classList.toggle('rbb-image-portrait', rawRatio < 0.85);
-      container.classList.toggle('rbb-image-landscape', rawRatio >= 0.85);
-      container.classList.toggle('rbb-image-wide', rawRatio >= 2.1);
+      const displayRatio = fixedBackdrop ? 16 / 6 : (fixedPoster ? 2 / 3 : ratio);
+      container.style.aspectRatio = `${displayRatio} / 1`;
+      container.style.setProperty('--rbb-img-ratio', `${displayRatio} / 1`);
+      container.classList.toggle('rbb-image-portrait', !fixedBackdrop && (fixedPoster || rawRatio < 0.85));
+      container.classList.toggle('rbb-image-landscape', fixedBackdrop || (!fixedPoster && rawRatio >= 0.85));
+      container.classList.toggle('rbb-image-wide', fixedBackdrop || (!fixedPoster && rawRatio >= 2.1));
       if (card) {
-        card.classList.toggle('rbb-card-portrait-media', rawRatio < 0.85);
-        card.classList.toggle('rbb-card-landscape-media', rawRatio >= 0.85);
-        card.classList.toggle('rbb-card-wide-media', rawRatio >= 2.1);
+        card.classList.toggle('rbb-card-portrait-media', !fixedBackdrop && (fixedPoster || rawRatio < 0.85));
+        card.classList.toggle('rbb-card-landscape-media', fixedBackdrop || (!fixedPoster && rawRatio >= 0.85));
+        card.classList.toggle('rbb-card-wide-media', fixedBackdrop || (!fixedPoster && rawRatio >= 2.1));
       }
     };
     if (img.complete && img.naturalWidth) apply();
@@ -3112,7 +3117,8 @@
               <span>Movie artwork</span>
               <select name="movieArtworkMode">
                 <option value="rlsbb">RLSBB images (default)</option>
-                <option value="tmdb">TMDB artwork, placeholder while loading</option>
+                <option value="tmdb">TMDB poster, placeholder while loading</option>
+                <option value="tmdb-backdrop">TMDB backdrop, placeholder while loading</option>
                 <option value="placeholder">Placeholders only</option>
               </select>
             </label>
