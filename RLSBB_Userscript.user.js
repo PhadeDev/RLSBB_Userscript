@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.0
+// @version      2.8.1
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.0
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.0
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.1
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.1
 // ==/UserScript==
 
 (function () {
@@ -156,13 +156,23 @@
   // ---- download settings: AllDebrid API key + aria2 RPC, stored via GM_setValue so they
   // never touch the (public) GitHub repo — entered once through the Settings dialog ----
   function getSetting(key, fallback) {
-    if (typeof GM_getValue === 'function') return GM_getValue(key, fallback);
-    return localStorage.getItem('rbb_' + key) ?? fallback;
+    let value = fallback;
+    try {
+      if (typeof GM_getValue === 'function') value = GM_getValue(key, fallback);
+    } catch {}
+    if (value !== fallback && value !== undefined && value !== null && value !== '') return value;
+    try {
+      const localValue = localStorage.getItem('rbb_' + key);
+      if (localValue !== null && localValue !== undefined && localValue !== '') return localValue;
+    } catch {}
+    return value ?? fallback;
   }
 
   function setSetting(key, value) {
     if (typeof GM_setValue === 'function') GM_setValue(key, value);
-    else localStorage.setItem('rbb_' + key, value);
+    try {
+      localStorage.setItem('rbb_' + key, value);
+    } catch {}
   }
 
   function getJsonSetting(key, fallback) {
@@ -3114,14 +3124,15 @@
     dialog.querySelector('.rbb-settings-form').addEventListener('submit', event => {
       event.preventDefault();
       const form = event.currentTarget;
-      setSetting('artworkMode', form.artworkMode.value);
-      setSetting('tmdbApiKey', form.tmdbApiKey.value.trim());
-      setSetting('allDebridKey', form.allDebridKey.value.trim());
-      setSetting('aria2Rpc', form.aria2Rpc.value.trim());
-      setSetting('aria2Secret', form.aria2Secret.value.trim());
-      setSetting('localAria2Rpc', form.localAria2Rpc.value.trim());
-      setSetting('localAria2Secret', form.localAria2Secret.value.trim());
-      setSetting('localAria2Dir', form.localAria2Dir.value.trim());
+      const fields = form.elements;
+      setSetting('artworkMode', fields.artworkMode.value);
+      setSetting('tmdbApiKey', fields.tmdbApiKey.value.trim());
+      setSetting('allDebridKey', fields.allDebridKey.value.trim());
+      setSetting('aria2Rpc', fields.aria2Rpc.value.trim());
+      setSetting('aria2Secret', fields.aria2Secret.value.trim());
+      setSetting('localAria2Rpc', fields.localAria2Rpc.value.trim());
+      setSetting('localAria2Secret', fields.localAria2Secret.value.trim());
+      setSetting('localAria2Dir', fields.localAria2Dir.value.trim());
 
       const status = dialog.querySelector('[data-settings-status]');
       status.textContent = 'Saved. Reload the page to apply artwork changes.';
@@ -3139,14 +3150,15 @@
     const settings = getDownloadSettings();
     const artworkSettings = getArtworkSettings();
     const form = dialog.querySelector('.rbb-settings-form');
-    form.artworkMode.value = artworkSettings.artworkMode;
-    form.tmdbApiKey.value = artworkSettings.tmdbApiKey;
-    form.allDebridKey.value = settings.allDebridKey;
-    form.aria2Rpc.value = settings.aria2Rpc;
-    form.aria2Secret.value = settings.aria2Secret;
-    form.localAria2Rpc.value = settings.localAria2Rpc;
-    form.localAria2Secret.value = settings.localAria2Secret;
-    form.localAria2Dir.value = settings.localAria2Dir;
+    const fields = form.elements;
+    fields.artworkMode.value = artworkSettings.artworkMode;
+    fields.tmdbApiKey.value = artworkSettings.tmdbApiKey;
+    fields.allDebridKey.value = settings.allDebridKey;
+    fields.aria2Rpc.value = settings.aria2Rpc;
+    fields.aria2Secret.value = settings.aria2Secret;
+    fields.localAria2Rpc.value = settings.localAria2Rpc;
+    fields.localAria2Secret.value = settings.localAria2Secret;
+    fields.localAria2Dir.value = settings.localAria2Dir;
 
     if (!dialog.open) dialog.showModal();
     document.body.style.overflow = 'hidden';
@@ -4053,6 +4065,7 @@
         line-height: 1.25 !important;
         letter-spacing: -.01em;
         text-wrap: balance;
+        color: var(--rbb-text) !important;
       }
 
       .rbb-detail-card .rbb-card-title {
@@ -4765,6 +4778,16 @@
         padding: 0 10px;
         font-size: 13px;
         outline: none;
+      }
+
+      .rbb-settings-field input::placeholder {
+        color: var(--rbb-faint);
+        opacity: 1;
+      }
+
+      .rbb-settings-field select option {
+        background: #101821;
+        color: var(--rbb-text);
       }
 
       .rbb-settings-actions {
