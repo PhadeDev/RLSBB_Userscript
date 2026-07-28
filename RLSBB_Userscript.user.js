@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Clean Board
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.7.3
+// @version      2.8.0
 // @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -18,23 +18,36 @@
 // @connect      post.rlsbb.in
 // @connect      search.rlsbb.in
 // @connect      api.alldebrid.com
+// @connect      api.themoviedb.org
 // @connect      192.168.0.200
 // @connect      127.0.0.1
+// @resource     rbbMoviePlaceholder https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/placeholders/movie.png
+// @resource     rbbTvPlaceholder https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/placeholders/tv.png
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
+// @grant        GM_getResourceURL
+// @grant        GM_registerMenuCommand
 // @grant        GM_download
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.7.3
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.7.3
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.0
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.0
 // ==/UserScript==
 
 (function () {
   'use strict';
 
   const STORAGE_KEY = 'rbbCleanBoard.v11';
+  const TMDB_CACHE_KEY = 'tmdbArtworkCache.v1';
+  const TMDB_CACHE_MAX_AGE = 90 * 24 * 60 * 60 * 1000;
+  const TMDB_MISS_MAX_AGE = 14 * 24 * 60 * 60 * 1000;
+  const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
+  const PLACEHOLDER_FALLBACKS = {
+    movie: 'https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/placeholders/movie.png',
+    tv: 'https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/assets/placeholders/tv.png'
+  };
   const isPostPage = location.hostname.startsWith('post.') || document.body.classList.contains('single-post');
   const isSearchPage = location.hostname.startsWith('search.');
   // Recommended posters only make sense on the true homepage/archive browse view
@@ -152,6 +165,20 @@
     else localStorage.setItem('rbb_' + key, value);
   }
 
+  function getJsonSetting(key, fallback) {
+    const raw = getSetting(key, '');
+    if (!raw) return fallback;
+    try {
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function setJsonSetting(key, value) {
+    setSetting(key, JSON.stringify(value));
+  }
+
   function getDownloadSettings() {
     return {
       allDebridKey: getSetting('allDebridKey', ''),
@@ -162,6 +189,14 @@
       localAria2Rpc: getSetting('localAria2Rpc', 'http://127.0.0.1:6802/jsonrpc'),
       localAria2Secret: getSetting('localAria2Secret', ''),
       localAria2Dir: getSetting('localAria2Dir', '/home/Phaderon/Downloads')
+    };
+  }
+
+  function getArtworkSettings() {
+    const mode = getSetting('artworkMode', 'rlsbb');
+    return {
+      artworkMode: ['rlsbb', 'tmdb', 'placeholder'].includes(mode) ? mode : 'rlsbb',
+      tmdbApiKey: getSetting('tmdbApiKey', '')
     };
   }
 
@@ -567,6 +602,41 @@
     `;
   }
 
+  function resourceUrl(name, fallback) {
+    try {
+      if (typeof GM_getResourceURL === 'function') return GM_getResourceURL(name) || fallback;
+    } catch {}
+    return fallback;
+  }
+
+  function mediaKindForData(data) {
+    const cats = (data.categories || []).join(' ').toLowerCase();
+    const title = String(data.title || '');
+    if (/tv|episode|foreign tv|tv packs/.test(cats) || /\bS\d{1,2}E\d{1,2}\b/i.test(title)) return 'tv';
+    return 'movie';
+  }
+
+  function placeholderForKind(kind) {
+    return kind === 'tv'
+      ? resourceUrl('rbbTvPlaceholder', PLACEHOLDER_FALLBACKS.tv)
+      : resourceUrl('rbbMoviePlaceholder', PLACEHOLDER_FALLBACKS.movie);
+  }
+
+  function artworkInitialUrl(data) {
+    const kind = mediaKindForData(data);
+    const placeholder = placeholderForKind(kind);
+    const { artworkMode } = getArtworkSettings();
+    if (artworkMode === 'rlsbb') return data.image || placeholder;
+    return placeholder;
+  }
+
+  function imageHtmlForData(data) {
+    const kind = mediaKindForData(data);
+    const placeholder = placeholderForKind(kind);
+    const src = artworkInitialUrl(data);
+    return `<img src="${escAttr(src)}" alt="" data-rbb-artwork-img data-media-kind="${escAttr(kind)}" data-rlsbb-src="${escAttr(data.image || '')}" data-placeholder-src="${escAttr(placeholder)}">`;
+  }
+
   // Builds the card's inner HTML for either context: the compact feed-grid card (detail=false)
   // or the full detail view -- the actual post page, and (via openLightbox) the lightbox modal
   // triggered from a feed card (detail=true either way). `includeCommentsFooter` is kept
@@ -604,7 +674,7 @@
       ${specStrip}
 
       <a class="rbb-image" href="${escAttr(data.url)}" target="_blank" rel="noopener noreferrer">
-        ${data.image ? `<img src="${escAttr(data.image)}" alt="">` : `<div class="rbb-no-image">No image</div>`}
+        ${imageHtmlForData(data)}
       </a>
 
       <div class="rbb-content">
@@ -680,6 +750,139 @@
     else img.addEventListener('load', apply, { once: true });
   }
 
+  let artworkObserver = null;
+  const artworkDataByCard = new WeakMap();
+  const activeArtworkFetches = new Set();
+
+  function observeArtworkCard(card, data, immediate = false) {
+    const { artworkMode, tmdbApiKey } = getArtworkSettings();
+    if (artworkMode !== 'tmdb' || !tmdbApiKey) return;
+
+    artworkDataByCard.set(card, data);
+    if (immediate || isPostPage) {
+      loadTmdbArtwork(card, data);
+      return;
+    }
+
+    if (!artworkObserver && typeof IntersectionObserver === 'function') {
+      artworkObserver = new IntersectionObserver(entries => {
+        entries.forEach(entry => {
+          if (!entry.isIntersecting) return;
+          artworkObserver.unobserve(entry.target);
+          const entryData = artworkDataByCard.get(entry.target);
+          if (entryData) loadTmdbArtwork(entry.target, entryData);
+        });
+      }, { rootMargin: '420px 0px' });
+    }
+
+    if (artworkObserver) artworkObserver.observe(card);
+    else loadTmdbArtwork(card, data);
+  }
+
+  function parseMediaSearch(data) {
+    const title = String(data.title || '').replace(/\s+/g, ' ').trim();
+    const yearMatch = title.match(/\b(19\d{2}|20\d{2})\b/);
+    const year = yearMatch ? yearMatch[1] : '';
+    let query = title
+      .replace(/\bS\d{1,2}E\d{1,2}\b.*$/i, '')
+      .replace(/\b(19\d{2}|20\d{2})\b.*$/i, '')
+      .replace(/\b(4320p|2160p|1080p|720p|480p|4k|8k|uhd|bluray|brrip|web[-.\s]?dl|webrip|hdr10p?|hdr|dv|h\.?26[45]|x26[45]|hevc|av1|remux|multi)\b.*$/i, '')
+      .replace(/[._-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!query) query = title.replace(/\b(19\d{2}|20\d{2})\b.*$/i, '').trim() || title;
+    return { kind: mediaKindForData(data), query, year };
+  }
+
+  function tmdbCacheKey(data) {
+    const parsed = parseMediaSearch(data);
+    return [parsed.kind, parsed.query.toLowerCase(), parsed.year || ''].join('|');
+  }
+
+  function getTmdbCache() {
+    return getJsonSetting(TMDB_CACHE_KEY, {});
+  }
+
+  function setTmdbCache(cache) {
+    const entries = Object.entries(cache)
+      .sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0))
+      .slice(0, 500);
+    setJsonSetting(TMDB_CACHE_KEY, Object.fromEntries(entries));
+  }
+
+  function cachedTmdbArtwork(cacheKey) {
+    const entry = getTmdbCache()[cacheKey];
+    if (!entry) return null;
+    const maxAge = entry.miss ? TMDB_MISS_MAX_AGE : TMDB_CACHE_MAX_AGE;
+    if (Date.now() - (entry.at || 0) > maxAge) return null;
+    return entry;
+  }
+
+  async function loadTmdbArtwork(card, data) {
+    const img = card.querySelector('[data-rbb-artwork-img]');
+    const imageLink = card.querySelector('.rbb-image');
+    if (!img || !imageLink) return;
+
+    const { artworkMode, tmdbApiKey } = getArtworkSettings();
+    if (artworkMode !== 'tmdb' || !tmdbApiKey) return;
+
+    const key = tmdbCacheKey(data);
+    const cached = cachedTmdbArtwork(key);
+    if (cached?.url) {
+      swapArtworkImage(img, imageLink, cached.url);
+      return;
+    }
+    if (cached?.miss || activeArtworkFetches.has(key)) return;
+
+    activeArtworkFetches.add(key);
+    try {
+      const url = await fetchTmdbPosterUrl(data, tmdbApiKey);
+      const cache = getTmdbCache();
+      cache[key] = url ? { url, at: Date.now() } : { miss: true, at: Date.now() };
+      setTmdbCache(cache);
+      if (url) swapArtworkImage(img, imageLink, url);
+    } catch (err) {
+      log('TMDB artwork lookup failed:', err?.message || err);
+    } finally {
+      activeArtworkFetches.delete(key);
+    }
+  }
+
+  async function fetchTmdbPosterUrl(data, apiKey) {
+    const parsed = parseMediaSearch(data);
+    if (!parsed.query) return '';
+
+    const endpoint = parsed.kind === 'tv' ? 'tv' : 'movie';
+    const params = new URLSearchParams({
+      api_key: apiKey,
+      query: parsed.query,
+      include_adult: 'false'
+    });
+    if (parsed.year) params.set(endpoint === 'tv' ? 'first_air_date_year' : 'year', parsed.year);
+
+    const response = await gmRequest({
+      method: 'GET',
+      url: `https://api.themoviedb.org/3/search/${endpoint}?${params.toString()}`,
+      timeout: 15000
+    });
+    if (response.status < 200 || response.status >= 300) throw new Error(`TMDB HTTP ${response.status}`);
+
+    const payload = JSON.parse(response.responseText || '{}');
+    const best = (payload.results || []).find(result => result.poster_path) || null;
+    return best?.poster_path ? TMDB_IMAGE_BASE + best.poster_path : '';
+  }
+
+  function swapArtworkImage(img, imageLink, url) {
+    if (!url || img.src === url) return;
+    img.classList.add('rbb-artwork-loading');
+    img.addEventListener('load', () => {
+      fitImageAspect(imageLink, img);
+      img.classList.remove('rbb-artwork-loading');
+      img.classList.add('rbb-artwork-loaded');
+    }, { once: true });
+    img.src = url;
+  }
+
   function appendArticle(article, grid, doc = document) {
     const data = extractArticle(article, doc);
 
@@ -701,6 +904,7 @@
     const imageLink = card.querySelector('.rbb-image');
     const cardImg = imageLink?.querySelector('img');
     if (imageLink && cardImg) fitImageAspect(imageLink, cardImg);
+    observeArtworkCard(card, data);
 
     const bridge = card.querySelector('.rbb-extension-bridge');
 
@@ -2807,6 +3011,7 @@
     const lbImageLink = wrapper.querySelector('.rbb-image');
     const lbImg = lbImageLink?.querySelector('img');
     if (lbImageLink && lbImg) fitImageAspect(lbImageLink, lbImg);
+    observeArtworkCard(wrapper, data, true);
 
     body.innerHTML = '';
     body.appendChild(wrapper);
@@ -2837,12 +3042,30 @@
       </button>
       <div class="rbb-card rbb-detail-card">
         <div class="rbb-content">
-          <h2 class="rbb-card-title">Download settings</h2>
+          <h2 class="rbb-card-title">RLSBB Clean Board settings</h2>
           <p class="rbb-description" style="max-width:none;">
             Stored only in this browser (Tampermonkey storage) — never written back to the script's GitHub repo.
           </p>
 
           <form class="rbb-settings-form">
+            <h3 class="rbb-settings-section-title">Artwork</h3>
+            <label class="rbb-settings-field">
+              <span>Artwork mode</span>
+              <select name="artworkMode">
+                <option value="rlsbb">RLSBB images (default)</option>
+                <option value="tmdb">TMDB artwork, placeholder while loading</option>
+                <option value="placeholder">Placeholders only</option>
+              </select>
+            </label>
+            <label class="rbb-settings-field">
+              <span>TMDB API key</span>
+              <input type="password" name="tmdbApiKey" autocomplete="off" placeholder="only needed for TMDB artwork mode">
+            </label>
+            <p class="rbb-description" style="max-width:none; margin-top:2px;">
+              TMDB artwork is fetched only for visible cards and cached locally. RLSBB images remain the public-safe default.
+            </p>
+
+            <h3 class="rbb-settings-section-title">Downloads</h3>
             <label class="rbb-settings-field">
               <span>AllDebrid API key</span>
               <input type="password" name="allDebridKey" autocomplete="off" placeholder="from alldebrid.com/apikeys">
@@ -2891,6 +3114,8 @@
     dialog.querySelector('.rbb-settings-form').addEventListener('submit', event => {
       event.preventDefault();
       const form = event.currentTarget;
+      setSetting('artworkMode', form.artworkMode.value);
+      setSetting('tmdbApiKey', form.tmdbApiKey.value.trim());
       setSetting('allDebridKey', form.allDebridKey.value.trim());
       setSetting('aria2Rpc', form.aria2Rpc.value.trim());
       setSetting('aria2Secret', form.aria2Secret.value.trim());
@@ -2899,17 +3124,23 @@
       setSetting('localAria2Dir', form.localAria2Dir.value.trim());
 
       const status = dialog.querySelector('[data-settings-status]');
-      status.textContent = 'Saved ✓';
+      status.textContent = 'Saved. Reload the page to apply artwork changes.';
       setTimeout(() => { status.textContent = ''; }, 2500);
     });
   }
 
   function openSettingsDialog() {
+    injectStyles();
+    injectSettingsDialog();
+
     const dialog = document.getElementById('rbb-settings-dialog');
     if (!dialog) return;
 
     const settings = getDownloadSettings();
+    const artworkSettings = getArtworkSettings();
     const form = dialog.querySelector('.rbb-settings-form');
+    form.artworkMode.value = artworkSettings.artworkMode;
+    form.tmdbApiKey.value = artworkSettings.tmdbApiKey;
     form.allDebridKey.value = settings.allDebridKey;
     form.aria2Rpc.value = settings.aria2Rpc;
     form.aria2Secret.value = settings.aria2Secret;
@@ -2919,6 +3150,16 @@
 
     if (!dialog.open) dialog.showModal();
     document.body.style.overflow = 'hidden';
+  }
+
+  function registerUserscriptMenu() {
+    try {
+      if (typeof GM_registerMenuCommand === 'function') {
+        GM_registerMenuCommand('Configure RLSBB Clean Board', openSettingsDialog);
+      }
+    } catch (err) {
+      log('Could not register userscript menu command:', err?.message || err);
+    }
   }
 
   function closeSettingsDialog() {
@@ -3779,6 +4020,14 @@
         opacity: .98;
       }
 
+      .rbb-image img.rbb-artwork-loading {
+        opacity: .62;
+      }
+
+      .rbb-image img.rbb-artwork-loaded {
+        opacity: 1;
+      }
+
       .rbb-no-image {
         height: 100%;
         min-height: 60px;
@@ -4499,7 +4748,15 @@
         color: var(--rbb-muted);
       }
 
-      .rbb-settings-field input {
+      .rbb-settings-section-title {
+        margin: 4px 0 -3px;
+        color: #dbe8f4;
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .rbb-settings-field input,
+      .rbb-settings-field select {
         height: 36px;
         border-radius: 9px;
         border: 1px solid var(--rbb-border-strong);
@@ -4927,6 +5184,8 @@
   const onProtectedTo = /(^|\.)protected\.to$/i.test(location.hostname);
 
   function bootForThisPage() {
+    registerUserscriptMenu();
+
     // The magnet-link helper is universal (runs everywhere the @match covers, i.e. every
     // site) and independent of which RLSBB-specific flow (if any) also runs on this page.
     injectSettingsDialog();
