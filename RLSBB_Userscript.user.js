@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.12
+// @version      2.8.13
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.12
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.12
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.13
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.13
 // ==/UserScript==
 
 (function () {
@@ -103,6 +103,7 @@
       sort: 'newest',
       hideSupport: true,
       hideApps: true,
+      hideLowQualityMovies: true,
       hideTv: false,
       hideGames: false,
       hideMagazines: true,
@@ -497,6 +498,7 @@
 
           ${toggle('hideSupport', 'Hide support')}
           ${toggle('hideApps', 'Hide apps')}
+          ${toggle('hideLowQualityMovies', 'Hide low movies')}
           ${toggle('hideTv', 'Hide TV')}
           ${toggle('hideGames', 'Hide games')}
           ${toggle('hideMagazines', 'Hide mags')}
@@ -1025,6 +1027,7 @@
     card.dataset.title = data.title.toLowerCase();
     card.dataset.text = data.fullText.toLowerCase();
     card.dataset.categories = data.categories.join(' ').toLowerCase();
+    card.dataset.mediaKind = mediaKindForData(data);
     card.dataset.hasRg = data.rgLinks.length ? '1' : '0';
     card.dataset.timestamp = data.timestamp ? String(data.timestamp) : '0';
 
@@ -2207,6 +2210,20 @@
     app.querySelector('[data-open-settings]')?.addEventListener('click', openSettingsDialog);
   }
 
+  function isLowQualityMovieCard(card) {
+    if ((card.dataset.mediaKind || '') !== 'movie') return false;
+
+    const title = card.dataset.title || '';
+    if (/\b(?:720p|480p|360p)\b/.test(title)) return true;
+    if (/\b(?:1080p|2160p|4320p|4k|8k|uhd)\b/.test(title)) return false;
+
+    // Plain BDRip/DVDRip/x264 movie posts with no resolution marker are usually the duplicate
+    // low-quality entries sitting beside the 1080p/4K post for the same title.
+    if (/\b(?:bdrip|dvdrip|hdrip|webrip|hdtv|x264|h\.?264)\b/.test(title)) return true;
+
+    return false;
+  }
+
   function applyFiltersAndSort() {
     const grid = document.querySelector('[data-grid]');
     if (!grid) return;
@@ -2229,6 +2246,7 @@
         if (state.categoryFilter && !cats.includes(state.categoryFilter)) hideCard = true;
         if (state.hideSupport && /support us|supportus/.test(text)) hideCard = true;
         if (state.hideApps && /applications|macos|windows/.test(cats + ' ' + text)) hideCard = true;
+        if (state.hideLowQualityMovies && isLowQualityMovieCard(card)) hideCard = true;
         if (state.hideTv && /tv shows|foreign tv|tv packs/.test(cats)) hideCard = true;
         if (state.hideGames && /games|mac|pc/.test(cats)) hideCard = true;
         if (state.hideMagazines && /magazines|music|album/.test(cats)) hideCard = true;
