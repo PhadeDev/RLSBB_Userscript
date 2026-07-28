@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         RLSBB Clean Board
+// @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.5
-// @description  Dense-grid RLSBB cleaner with RapidGator-focused cards, click-to-open post lightbox, clickable category filter pills, AllDebrid-unlock download buttons (browser + aria2/NAS) on both RLSBB and the RapidGator file page itself, a protected.to multi-part-RAR helper for the NAS tray's Manual Import, homepage-only recommendation rail, infinite scroll, quality filters, auto-expanded post details, and a site-wide magnet-link helper (AllDebrid caching + browser/local-aria2 download) that works on any page.
+// @version      2.8.6
+// @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
 // @match        https://www.rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.5
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.5
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.6
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.6
 // ==/UserScript==
 
 (function () {
@@ -222,7 +222,7 @@
     const articles = [...document.querySelectorAll('#post-wrapper article, article.post')];
 
     if (!articles.length) {
-      console.warn('RBB Clean v11: no posts found; leaving original page untouched.');
+      console.warn('RLSBB Prism: no posts found; leaving original page untouched.');
       return;
     }
 
@@ -297,7 +297,7 @@
     panel.className = 'rbb-card rbb-detail-card rbb-rg-page-panel';
     panel.innerHTML = `
       <div class="rbb-content">
-        <h2 class="rbb-card-title">RLSBB Clean Board</h2>
+        <h2 class="rbb-card-title">RLSBB Prism</h2>
         <p class="rbb-description" style="max-width:none;">
           Detected file: <strong>${esc(rawFilename)}</strong>${fileSize ? ` &middot; ${esc(fileSize)}` : ''}
         </p>
@@ -417,7 +417,7 @@
     panel.className = 'rbb-card rbb-detail-card rbb-rg-page-panel';
     panel.innerHTML = `
       <div class="rbb-content">
-        <h2 class="rbb-card-title">RLSBB Clean Board</h2>
+        <h2 class="rbb-card-title">RLSBB Prism</h2>
         <p class="rbb-description" style="max-width:none;">
           This release is split into <strong>${links.length}</strong> part${links.length === 1 ? '' : 's'}:
           <strong>${esc(releaseName)}</strong>${size ? ` &middot; ${esc(size)}` : ''}
@@ -2252,7 +2252,7 @@
       refreshRecommendedRail();
       hidePosterWallsSafely();
     } catch (error) {
-      console.warn('RBB Clean v11: next page failed', error);
+      console.warn('RLSBB Prism: next page failed', error);
     } finally {
       isLoading = false;
       if (loader) loader.hidden = true;
@@ -2292,7 +2292,7 @@
   // Prefixed console logging so the download flow is actually debuggable from DevTools —
   // AllDebrid's unlock endpoint can be genuinely slow for some hosts, and previously there
   // was no way to tell "still working" apart from "silently stuck".
-  const LOG_PREFIX = '[RLSBB Clean Board]';
+  const LOG_PREFIX = '[RLSBB Prism]';
   function log(...args) { console.log(LOG_PREFIX, ...args); }
   function logError(...args) { console.error(LOG_PREFIX, ...args); }
 
@@ -3104,7 +3104,7 @@
       </button>
       <div class="rbb-card rbb-detail-card">
         <div class="rbb-content">
-          <h2 class="rbb-card-title">RLSBB Clean Board settings</h2>
+          <h2 class="rbb-card-title">RLSBB Prism settings</h2>
           <p class="rbb-description" style="max-width:none;">
             Stored only in this browser (Tampermonkey storage) — never written back to the script's GitHub repo.
           </p>
@@ -3230,7 +3230,7 @@
   function registerUserscriptMenu() {
     try {
       if (typeof GM_registerMenuCommand === 'function') {
-        GM_registerMenuCommand('Configure RLSBB Clean Board', openSettingsDialog);
+        GM_registerMenuCommand('Configure RLSBB Prism', openSettingsDialog);
       }
     } catch (err) {
       log('Could not register userscript menu command:', err?.message || err);
@@ -3249,7 +3249,7 @@
     const app = document.querySelector('#rbb-clean');
 
     if (!app || !app.querySelector('.rbb-card')) {
-      console.warn('RBB Clean v11: custom UI did not render; original page left visible.');
+      console.warn('RLSBB Prism: custom UI did not render; original page left visible.');
       return;
     }
 
