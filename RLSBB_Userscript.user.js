@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.13
+// @version      2.8.14
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,12 +32,36 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.13
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.13
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.14
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.14
 // ==/UserScript==
 
 (function () {
   'use strict';
+
+  // Sites that enforce a Trusted Types CSP (require-trusted-types-for 'script') block plain
+  // innerHTML assignment outright, which used to throw an uncaught TypeError and kill the rest
+  // of this script's execution on that page/frame -- including the magnet-link helper, which is
+  // meant to work everywhere (@match *://*/*), not just on RLSBB. Registering our own policy
+  // (createHTML is a no-op passthrough; we trust our own template strings) lets innerHTML keep
+  // working on those sites instead of silently no-opping the whole script.
+  let ttPolicy = null;
+  if (window.trustedTypes && typeof window.trustedTypes.createPolicy === 'function') {
+    try {
+      ttPolicy = window.trustedTypes.createPolicy('rbb-prism-html', { createHTML: html => html });
+    } catch {
+      // Policy name already taken (e.g. script ran twice) or default policy required elsewhere --
+      // fall through with ttPolicy left null, setHTML() below still degrades gracefully.
+    }
+  }
+  function setHTML(el, html) {
+    if (!el) return;
+    try {
+      el.innerHTML = ttPolicy ? ttPolicy.createHTML(html) : html;
+    } catch (err) {
+      console.warn('RLSBB Prism: innerHTML blocked on this page (CSP Trusted Types) --', err?.message || err);
+    }
+  }
 
   const STORAGE_KEY = 'rbbCleanBoard.v11';
   const TMDB_CACHE_KEY = 'tmdbArtworkCache.v1';
@@ -158,16 +182,27 @@
   // ---- download settings: AllDebrid API key + aria2 RPC, stored via GM_setValue so they
   // never touch the (public) GitHub repo — entered once through the Settings dialog ----
   function getSetting(key, fallback) {
-    let value = fallback;
+    let gmValue = fallback;
     try {
-      if (typeof GM_getValue === 'function') value = GM_getValue(key, fallback);
+      if (typeof GM_getValue === 'function') gmValue = GM_getValue(key, fallback);
     } catch {}
-    if (value !== fallback && value !== undefined && value !== null && value !== '') return value;
+    const hasGmValue = gmValue !== fallback && gmValue !== undefined && gmValue !== null && gmValue !== '';
+    if (hasGmValue) {
+      // Keep this origin's localStorage mirror fresh on every read, so a real value stays
+      // recoverable here even if GM storage itself is ever wiped (e.g. a Tampermonkey reinstall).
+      try { localStorage.setItem('rbb_' + key, gmValue); } catch {}
+      return gmValue;
+    }
     try {
       const localValue = localStorage.getItem('rbb_' + key);
-      if (localValue !== null && localValue !== undefined && localValue !== '') return localValue;
+      if (localValue !== null && localValue !== undefined && localValue !== '') {
+        // GM storage came back empty but this origin still remembers it -- restore it into GM
+        // storage right away instead of just limping along on the (more easily cleared) mirror.
+        try { if (typeof GM_setValue === 'function') GM_setValue(key, localValue); } catch {}
+        return localValue;
+      }
     } catch {}
-    return value ?? fallback;
+    return gmValue ?? fallback;
   }
 
   function setSetting(key, value) {
@@ -189,6 +224,29 @@
 
   function setJsonSetting(key, value) {
     setSetting(key, JSON.stringify(value));
+  }
+
+  // Every key the Settings dialog's Backup/Restore controls round-trip. Keep in sync with the
+  // form fields in injectSettingsDialog().
+  const BACKUP_SETTING_KEYS = [
+    'movieArtworkMode', 'tvArtworkMode', 'tmdbApiKey',
+    'allDebridKey', 'aria2Rpc', 'aria2Secret',
+    'localAria2Rpc', 'localAria2Secret', 'localAria2Dir'
+  ];
+
+  function buildSettingsBackupBlob() {
+    const payload = {};
+    BACKUP_SETTING_KEYS.forEach(key => { payload[key] = getSetting(key, ''); });
+    return 'RBBPRISM1:' + btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+  }
+
+  function restoreSettingsBackupBlob(blob) {
+    const trimmed = (blob || '').trim();
+    if (!trimmed.startsWith('RBBPRISM1:')) throw new Error('Not a recognised backup blob');
+    const payload = JSON.parse(decodeURIComponent(escape(atob(trimmed.slice('RBBPRISM1:'.length)))));
+    BACKUP_SETTING_KEYS.forEach(key => {
+      if (typeof payload[key] === 'string') setSetting(key, payload[key]);
+    });
   }
 
   function getDownloadSettings() {
@@ -244,7 +302,7 @@
 
     const app = document.createElement('section');
     app.id = 'rbb-clean';
-    app.innerHTML = makeShell();
+    setHTML(app, makeShell());
 
     originalMain.prepend(app);
 
@@ -296,7 +354,7 @@
     const panel = document.createElement('div');
     panel.id = 'rbb-rg-panel';
     panel.className = 'rbb-card rbb-detail-card rbb-rg-page-panel';
-    panel.innerHTML = `
+    setHTML(panel, `
       <div class="rbb-content">
         <h2 class="rbb-card-title">RLSBB Prism</h2>
         <p class="rbb-description" style="max-width:none;">
@@ -319,7 +377,7 @@
         <span class="rbb-dl-status" id="rbb-rg-status" style="display:block; text-align:left; margin-top:8px;"></span>
         <span class="rbb-dl-progress" id="rbb-rg-progress" style="max-width:260px;"></span>
       </div>
-    `;
+    `);
 
     const anchor = document.querySelector('.file-descr') || document.body.firstElementChild;
     anchor.parentNode.insertBefore(panel, anchor);
@@ -416,7 +474,7 @@
     const panel = document.createElement('div');
     panel.id = 'rbb-protected-panel';
     panel.className = 'rbb-card rbb-detail-card rbb-rg-page-panel';
-    panel.innerHTML = `
+    setHTML(panel, `
       <div class="rbb-content">
         <h2 class="rbb-card-title">RLSBB Prism</h2>
         <p class="rbb-description" style="max-width:none;">
@@ -435,7 +493,7 @@
         </div>
         <span class="rbb-dl-status" id="rbb-protected-status" style="display:block; text-align:left; margin-top:8px;"></span>
       </div>
-    `;
+    `);
 
     const anchor = document.querySelector('.Encrypted-box')?.closest('.panel') || document.body.firstElementChild;
     anchor.parentNode.insertBefore(panel, anchor);
@@ -537,12 +595,12 @@
     const mount = app.querySelector('[data-search]');
 
     if (!originalSearch) {
-      mount.innerHTML = `
+      setHTML(mount, `
         <form action="https://search.rlsbb.in/" method="get" class="rbb-site-search">
           <input name="s" type="search" placeholder="Search title / keyword / IMDb ID">
           <button type="submit">Search</button>
         </form>
-      `;
+      `);
       return;
     }
 
@@ -570,12 +628,12 @@
     if (!mount) return;
 
     if (!widget) {
-      mount.innerHTML = `
+      setHTML(mount, `
         <a href="https://rlsbb.in/category/movies/">Movies</a>
         <a href="https://rlsbb.in/category/tv-shows/">TV Shows</a>
         <a href="https://rlsbb.in/category/games/">Games</a>
         <a href="https://rlsbb.in/category/applications/">Applications</a>
-      `;
+      `);
       return;
     }
 
@@ -588,13 +646,13 @@
     const side = app.querySelector('[data-side]');
     if (!side) return;
 
-    side.innerHTML = '';
+    setHTML(side, '');
 
     const box = document.createElement('details');
     box.className = 'rbb-recommended';
     box.open = !!state.recommendedOpen;
 
-    box.innerHTML = `
+    setHTML(box, `
       <summary>Recommended</summary>
       <div class="rbb-recommended-scroll" data-recommended-scroll>
         ${items.length ? items.map(item => recommendedItemHtml(item)).join('') : ''}
@@ -602,7 +660,7 @@
       <div class="rbb-recommended-empty" data-recommended-empty ${items.length ? 'hidden' : ''}>
         Looking for posters…
       </div>
-    `;
+    `);
 
     side.appendChild(box);
 
@@ -1031,7 +1089,7 @@
     card.dataset.hasRg = data.rgLinks.length ? '1' : '0';
     card.dataset.timestamp = data.timestamp ? String(data.timestamp) : '0';
 
-    card.innerHTML = buildCardInnerHtml(data, isPostPage, isPostPage);
+    setHTML(card, buildCardInnerHtml(data, isPostPage, isPostPage));
 
     const imageLink = card.querySelector('.rbb-image');
     const cardImg = imageLink?.querySelector('img');
@@ -1814,7 +1872,7 @@
     const clone = comments.cloneNode(true);
     clone.querySelectorAll('script, iframe, style, form, #respond').forEach(n => n.remove());
 
-    body.innerHTML = '';
+    setHTML(body, '');
     body.appendChild(clone);
     details.dataset.loaded = '1';
   }
@@ -2365,7 +2423,7 @@
         body.textContent = 'No comments found.';
       } else {
         comments.querySelectorAll('script, iframe, style, form, #respond').forEach(n => n.remove());
-        body.innerHTML = '';
+        setHTML(body, '');
         body.appendChild(comments.cloneNode(true));
       }
 
@@ -2807,13 +2865,13 @@
 
       const group = document.createElement('span');
       group.className = 'rbb-magnet-group';
-      group.innerHTML = `
+      setHTML(group, `
         <button type="button" class="rbb-magnet-btn rbb-magnet-browser" title="Cache via AllDebrid, then download in your browser">⬇ AllDebrid</button>
         <button type="button" class="rbb-magnet-btn rbb-magnet-local" title="Cache via AllDebrid, then send to local aria2 (choose folder)">➟ aria2</button>
         <button type="button" class="rbb-magnet-btn rbb-magnet-settings" title="Download settings (AllDebrid key, aria2 RPC/secret)">⚙</button>
         <span class="rbb-magnet-status" data-magnet-status></span>
         <span class="rbb-magnet-progress" data-magnet-progress></span>
-      `;
+      `);
 
       link.insertAdjacentElement('afterend', group);
 
@@ -2987,11 +3045,11 @@
 
     const actions = row.querySelector('.rbb-release-actions');
     if (actions) {
-      actions.innerHTML = `
+      setHTML(actions, `
         <div class="rbb-dead-banner" title="AllDebrid confirmed this file no longer exists on the file hoster (error code LINK_DOWN)">
           &#10060; File removed<br>from host
         </div>
-      `;
+      `);
     }
   }
 
@@ -3125,14 +3183,14 @@
     const dialog = document.createElement('dialog');
     dialog.id = 'rbb-lightbox-dialog';
     dialog.className = 'rbb-lightbox-dialog';
-    dialog.innerHTML = `
+    setHTML(dialog, `
       <button type="button" class="rbb-lightbox-close" aria-label="Close">
         <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
           <path d="M5 5 L19 19 M19 5 L5 19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"></path>
         </svg>
       </button>
       <div class="rbb-lightbox-body"></div>
-    `;
+    `);
 
     document.body.appendChild(dialog);
 
@@ -3158,14 +3216,14 @@
     // via document-level delegation (bindDownloadButtons/bindCategoryPills), not per-element.
     const wrapper = document.createElement('article');
     wrapper.className = 'rbb-card rbb-detail-card';
-    wrapper.innerHTML = buildCardInnerHtml(data, true, false);
+    setHTML(wrapper, buildCardInnerHtml(data, true, false));
 
     const lbImageLink = wrapper.querySelector('.rbb-image');
     const lbImg = lbImageLink?.querySelector('img');
     if (lbImageLink && lbImg) fitImageAspect(lbImageLink, lbImg);
     observeArtworkCard(wrapper, data, true);
 
-    body.innerHTML = '';
+    setHTML(body, '');
     body.appendChild(wrapper);
     dialog.scrollTop = 0;
     if (!dialog.open) dialog.showModal();
@@ -3186,7 +3244,7 @@
     const dialog = document.createElement('dialog');
     dialog.id = 'rbb-settings-dialog';
     dialog.className = 'rbb-lightbox-dialog rbb-settings-dialog';
-    dialog.innerHTML = `
+    setHTML(dialog, `
       <button type="button" class="rbb-lightbox-close" aria-label="Close">
         <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
           <path d="M5 5 L19 19 M19 5 L5 19" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" fill="none"></path>
@@ -3258,10 +3316,28 @@
               <span class="rbb-settings-status" data-settings-status></span>
               <button type="submit" class="rbb-rg-action">Save</button>
             </div>
+
+            <h3 class="rbb-settings-section-title">Backup &amp; restore</h3>
+            <p class="rbb-description" style="max-width:none; margin-top:2px;">
+              Everything above lives in Tampermonkey's storage, which can get wiped by a script reinstall
+              or a "clear browsing data" run. Copy a backup somewhere safe (a note, a password manager)
+              so a wipe is a paste, not a re-type.
+            </p>
+            <div class="rbb-settings-actions" style="justify-content:flex-start; gap:10px;">
+              <button type="button" class="rbb-rg-action" data-settings-backup>Copy settings backup</button>
+            </div>
+            <label class="rbb-settings-field">
+              <span>Restore from backup</span>
+              <textarea name="restoreBlob" rows="3" placeholder="Paste a backup blob here, then click Restore"></textarea>
+            </label>
+            <div class="rbb-settings-actions" style="justify-content:flex-start; gap:10px;">
+              <button type="button" class="rbb-rg-action" data-settings-restore>Restore</button>
+              <span class="rbb-settings-status" data-restore-status></span>
+            </div>
           </form>
         </div>
       </div>
-    `;
+    `);
 
     document.body.appendChild(dialog);
 
@@ -3290,15 +3366,36 @@
       status.textContent = 'Saved. Reload the page to apply artwork changes.';
       setTimeout(() => { status.textContent = ''; }, 2500);
     });
+
+    dialog.querySelector('[data-settings-backup]').addEventListener('click', () => {
+      const status = dialog.querySelector('[data-settings-status]');
+      try {
+        const blob = buildSettingsBackupBlob();
+        if (typeof GM_setClipboard === 'function') GM_setClipboard(blob, 'text');
+        else throw new Error('GM_setClipboard unavailable');
+        status.textContent = 'Backup copied to clipboard. Paste it somewhere safe.';
+      } catch (err) {
+        status.textContent = 'Could not copy backup: ' + (err?.message || err);
+      }
+      setTimeout(() => { status.textContent = ''; }, 4000);
+    });
+
+    dialog.querySelector('[data-settings-restore]').addEventListener('click', () => {
+      const form = dialog.querySelector('.rbb-settings-form');
+      const restoreStatus = dialog.querySelector('[data-restore-status]');
+      try {
+        restoreSettingsBackupBlob(form.elements.restoreBlob.value);
+        populateSettingsForm(dialog);
+        form.elements.restoreBlob.value = '';
+        restoreStatus.textContent = 'Restored.';
+      } catch (err) {
+        restoreStatus.textContent = 'Could not restore: ' + (err?.message || err);
+      }
+      setTimeout(() => { restoreStatus.textContent = ''; }, 4000);
+    });
   }
 
-  function openSettingsDialog() {
-    injectStyles();
-    injectSettingsDialog();
-
-    const dialog = document.getElementById('rbb-settings-dialog');
-    if (!dialog) return;
-
+  function populateSettingsForm(dialog) {
     const settings = getDownloadSettings();
     const artworkSettings = getArtworkSettings();
     const form = dialog.querySelector('.rbb-settings-form');
@@ -3312,6 +3409,16 @@
     fields.localAria2Rpc.value = settings.localAria2Rpc;
     fields.localAria2Secret.value = settings.localAria2Secret;
     fields.localAria2Dir.value = settings.localAria2Dir;
+  }
+
+  function openSettingsDialog() {
+    injectStyles();
+    injectSettingsDialog();
+
+    const dialog = document.getElementById('rbb-settings-dialog');
+    if (!dialog) return;
+
+    populateSettingsForm(dialog);
 
     if (!dialog.open) dialog.showModal();
     document.body.style.overflow = 'hidden';
@@ -5413,16 +5520,23 @@
   const onProtectedTo = /(^|\.)protected\.to$/i.test(location.hostname);
 
   function bootForThisPage() {
-    registerUserscriptMenu();
+    // Each step gets its own try/catch: this script runs on every site (@match *://*/*), and a
+    // page-specific quirk throwing in one step used to silently abort every step after it --
+    // including the magnet-link helper, which is meant to work everywhere regardless of what
+    // else on the page does or doesn't cooperate.
+    try { registerUserscriptMenu(); } catch (err) { log('registerUserscriptMenu failed:', err?.message || err); }
 
-    // The magnet-link helper is universal (runs everywhere the @match covers, i.e. every
-    // site) and independent of which RLSBB-specific flow (if any) also runs on this page.
-    injectSettingsDialog();
-    initMagnetLinkHelper();
+    // The settings dialog itself is built lazily, on first open (see openSettingsDialog), so
+    // there's nothing to eagerly inject here for it.
+    try { initMagnetLinkHelper(); } catch (err) { log('initMagnetLinkHelper failed:', err?.message || err); }
 
-    if (onRapidGator) initRapidGatorPage();
-    else if (onProtectedTo) initProtectedToPage();
-    else if (isRlsbbHost) init();
+    try {
+      if (onRapidGator) initRapidGatorPage();
+      else if (onProtectedTo) initProtectedToPage();
+      else if (isRlsbbHost) init();
+    } catch (err) {
+      log('Page-specific init failed:', err?.message || err);
+    }
   }
 
   if (document.readyState === 'loading') {
