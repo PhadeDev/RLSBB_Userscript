@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.14
+// @version      2.8.15
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.14
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.14
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.15
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.15
 // ==/UserScript==
 
 (function () {
@@ -2441,6 +2441,7 @@
   // AllDebrid's unlock endpoint can be genuinely slow for some hosts, and previously there
   // was no way to tell "still working" apart from "silently stuck".
   const LOG_PREFIX = '[RLSBB Prism]';
+  const LOCAL_HANDOFF_API = 'http://127.0.0.1:8771/api/local-download-jobs';
   function log(...args) { console.log(LOG_PREFIX, ...args); }
   function logError(...args) { console.error(LOG_PREFIX, ...args); }
 
@@ -2637,6 +2638,34 @@
 
     log('local aria2 queued job, gid:', json.result);
     return json.result; // gid
+  }
+
+  async function submitLocalHandoffJob({ magnetUri, suggestedName, downloadDir }) {
+    const body = JSON.stringify({
+      kind: 'magnet',
+      magnet: magnetUri,
+      name: suggestedName || 'download',
+      download_dir: downloadDir,
+      source_url: location.href
+    });
+    log('Submitting local handoff job to tray:', suggestedName, downloadDir);
+    const response = await gmRequest({
+      method: 'POST',
+      url: LOCAL_HANDOFF_API,
+      data: body,
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000
+    });
+    let json;
+    try {
+      json = JSON.parse(response.responseText);
+    } catch {
+      throw new Error('Tray handoff returned unreadable response.');
+    }
+    if (!json.ok) {
+      throw new Error(json.error || 'Tray rejected the local download job.');
+    }
+    return json;
   }
 
   // ---- AllDebrid magnet caching ----
@@ -2913,6 +2942,27 @@
       const { localAria2Dir } = getDownloadSettings();
       destDir = window.prompt('Save to folder (on this PC):', localAria2Dir || '/home/Phaderon/Downloads');
       if (destDir === null) return; // cancelled
+      beginDownloadOp();
+      buttons.forEach(b => { b.disabled = true; });
+      status.textContent = 'Sending job to tray…';
+      status.title = 'The tray will own the AllDebrid/cache/aria2 work after the job is accepted.';
+      if (progress) progress.classList.add('rbb-magnet-progress-active');
+      try {
+        const accepted = await submitLocalHandoffJob({ magnetUri, suggestedName, downloadDir: destDir });
+        status.textContent = `Sent to tray ✓ job ${accepted.job_id}`;
+        status.title = `Tray log: ${accepted.log || ''}`;
+        setSetting('localAria2Dir', destDir);
+      } catch (error) {
+        logError('Tray local handoff failed:', error);
+        status.textContent = error.message || 'Tray handoff failed';
+        status.style.color = '#c0392b';
+      } finally {
+        endDownloadOp();
+        buttons.forEach(b => { b.disabled = false; });
+        if (progress) progress.classList.remove('rbb-magnet-progress-active');
+        setTimeout(() => { status.textContent = ''; status.style.color = ''; status.title = ''; }, 15000);
+      }
+      return;
     }
 
     beginDownloadOp();
