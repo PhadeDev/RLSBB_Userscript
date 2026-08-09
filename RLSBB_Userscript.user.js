@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.15
+// @version      2.8.16
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.15
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.15
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.16
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.16
 // ==/UserScript==
 
 (function () {
@@ -545,6 +545,11 @@
             <option value="za" ${state.sort === 'za' ? 'selected' : ''}>Title Z–A</option>
           </select>
 
+          <span class="rbb-active-category" data-active-category ${state.categoryFilter ? '' : 'hidden'}>
+            <span data-active-category-label>${state.categoryFilter ? esc(activeCategoryLabel()) : ''}</span>
+            <button type="button" data-clear-category title="Clear category filter" aria-label="Clear category filter">×</button>
+          </span>
+
           <div class="rbb-version-filter-group">
             ${versionToggle('1080p', '1080p')}
             ${versionToggle('4k', '4K')}
@@ -589,6 +594,14 @@
         <span>${label}</span>
       </label>
     `;
+  }
+
+  function activeCategoryLabel() {
+    return `Category: ${String(state.categoryFilter || '')
+      .split(/\s+/)
+      .filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')}`;
   }
 
   function mountSearch(app, originalSearch) {
@@ -2260,6 +2273,12 @@
       input.addEventListener('change', handler);
     });
 
+    app.querySelector('[data-clear-category]')?.addEventListener('click', () => {
+      state.categoryFilter = '';
+      saveState();
+      applyFiltersAndSort();
+    });
+
     app.querySelector('.rbb-menu')?.addEventListener('toggle', event => {
       state.categoriesOpen = event.currentTarget.open;
       saveState();
@@ -2282,9 +2301,50 @@
     return false;
   }
 
+  function categoryHiddenByToggles(category) {
+    const cat = String(category || '').toLowerCase();
+    if (!cat) return false;
+
+    if (state.hideGames && /games|mac|pc/.test(cat)) return true;
+    if (state.hideTv && /tv shows|foreign tv|tv packs/.test(cat)) return true;
+    if (state.hideApps && /applications|macos|windows/.test(cat)) return true;
+    if (state.hideMagazines && /magazines|music|album/.test(cat)) return true;
+    if (state.hideSupport && /offtopic|support/.test(cat)) return true;
+
+    return false;
+  }
+
+  function normalizeFilterState() {
+    if (state.categoryFilter && categoryHiddenByToggles(state.categoryFilter)) {
+      state.categoryFilter = '';
+      saveState();
+    }
+  }
+
+  function syncActiveCategoryIndicator() {
+    const chip = document.querySelector('[data-active-category]');
+    if (!chip) return;
+
+    const label = chip.querySelector('[data-active-category-label]');
+    if (!state.categoryFilter) {
+      chip.hidden = true;
+      if (label) label.textContent = '';
+    } else {
+      chip.hidden = false;
+      if (label) label.textContent = activeCategoryLabel();
+    }
+
+    document.querySelectorAll('.rbb-cat-pill').forEach(pill => {
+      pill.classList.toggle('rbb-cat-active', Boolean(state.categoryFilter && pill.dataset.category === state.categoryFilter));
+    });
+  }
+
   function applyFiltersAndSort() {
     const grid = document.querySelector('[data-grid]');
     if (!grid) return;
+
+    normalizeFilterState();
+    syncActiveCategoryIndicator();
 
     const q = String(state.q || '').trim().toLowerCase();
     const activeVersionFilters = Object.entries(state.versionFilters)
@@ -3949,6 +4009,45 @@
         align-items: center;
       }
 
+      .rbb-active-category {
+        height: 29px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border-radius: 999px;
+        padding: 0 7px 0 10px;
+        border: 1px solid rgba(103,183,255,.45);
+        background: rgba(103,183,255,.13);
+        color: #dceeff;
+        font-size: 11px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .rbb-active-category[hidden] {
+        display: none !important;
+      }
+
+      .rbb-active-category button {
+        all: unset;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        color: #f5fbff;
+        background: rgba(255,255,255,.12);
+        cursor: pointer;
+        font-size: 13px;
+        line-height: 1;
+      }
+
+      .rbb-active-category button:hover {
+        background: rgba(255,255,255,.22);
+      }
+
       .rbb-toggle,
       .rbb-version-toggle {
         height: 29px;
@@ -4450,6 +4549,12 @@
       }
 
       .rbb-cat-pill:hover { color: #fff; background: rgba(103,183,255,.28); }
+
+      .rbb-cat-pill.rbb-cat-active {
+        color: #f8fbff;
+        border: 1px solid rgba(103,183,255,.5);
+        background: rgba(103,183,255,.25);
+      }
 
       .rbb-date-line {
         display: flex;
