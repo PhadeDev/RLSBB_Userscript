@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.16
+// @version      2.8.17
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.16
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.16
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.17
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.17
 // ==/UserScript==
 
 (function () {
@@ -367,7 +367,7 @@
         </label>
         <div class="rbb-settings-actions" style="justify-content:flex-start; gap:10px; margin-top:10px;">
           <button type="button" class="rbb-dl-btn rbb-dl-browser" id="rbb-rg-download" style="width:auto; flex-direction:row; padding:8px 14px;">
-            <span class="rbb-dl-icon" aria-hidden="true">&#8595;</span><span class="rbb-dl-label">Download</span>
+            <span class="rbb-dl-icon" aria-hidden="true">&#8595;</span><span class="rbb-dl-label">Local aria2</span>
           </button>
           <button type="button" class="rbb-dl-btn rbb-dl-aria2" id="rbb-rg-tonas" style="width:auto; flex-direction:row; padding:8px 14px;">
             <span class="rbb-dl-icon" aria-hidden="true">&#8677;</span><span class="rbb-dl-label">To NAS</span>
@@ -393,6 +393,42 @@
     const status = document.getElementById('rbb-rg-status');
     const progress = document.getElementById('rbb-rg-progress');
     const chosenName = (input.value || '').trim() || 'download';
+
+    if (mode === 'browser') {
+      const { localAria2Dir } = getDownloadSettings();
+      const destDir = window.prompt('Save to folder (on this PC):', localAria2Dir || '/home/Phaderon/Downloads');
+      if (destDir === null) return;
+
+      beginDownloadOp();
+      button.disabled = true;
+      button.classList.add('rbb-dl-busy');
+      status.classList.remove('rbb-dl-error');
+      status.textContent = 'Sending job to tray…';
+      status.title = 'The tray will own the AllDebrid unlock and local aria2 queue after this job is accepted.';
+      if (progress) progress.classList.add('rbb-dl-progress-active');
+
+      try {
+        const accepted = await submitLocalHandoffJob({
+          kind: 'link',
+          url: location.href,
+          suggestedName: chosenName,
+          downloadDir: destDir
+        });
+        status.textContent = `Sent to tray ✓ job ${accepted.job_id}`;
+        status.title = `Tray log: ${accepted.log || ''}`;
+        setSetting('localAria2Dir', destDir);
+      } catch (error) {
+        logError('RapidGator tray handoff failed:', error);
+        status.textContent = error.message || 'Tray handoff failed';
+        status.classList.add('rbb-dl-error');
+      } finally {
+        endDownloadOp();
+        button.disabled = false;
+        button.classList.remove('rbb-dl-busy');
+        if (progress) progress.classList.remove('rbb-dl-progress-active');
+      }
+      return;
+    }
 
     beginDownloadOp();
     button.disabled = true;
@@ -2700,15 +2736,16 @@
     return json.result; // gid
   }
 
-  async function submitLocalHandoffJob({ magnetUri, suggestedName, downloadDir }) {
+  async function submitLocalHandoffJob({ kind = 'magnet', magnetUri, url, suggestedName, downloadDir }) {
     const body = JSON.stringify({
-      kind: 'magnet',
+      kind,
       magnet: magnetUri,
+      url,
       name: suggestedName || 'download',
       download_dir: downloadDir,
       source_url: location.href
     });
-    log('Submitting local handoff job to tray:', suggestedName, downloadDir);
+    log('Submitting local handoff job to tray:', kind, suggestedName, downloadDir);
     const response = await gmRequest({
       method: 'POST',
       url: LOCAL_HANDOFF_API,
