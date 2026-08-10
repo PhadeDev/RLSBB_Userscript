@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.18
+// @version      2.8.19
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.18
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.18
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.19
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.19
 // ==/UserScript==
 
 (function () {
@@ -81,6 +81,7 @@
 
   let nextPageUrl = '';
   let isLoading = false;
+  let rssDateMapPromise = null;
   const state = loadState();
 
   // ---- in-flight download-op tracking ----
@@ -312,6 +313,7 @@
 
     const grid = app.querySelector('[data-grid]');
     articles.forEach(article => appendArticle(article, grid));
+    if (!isPostPage) hydrateFeedCardDates(grid);
 
     bindUi(app);
     applyFiltersAndSort();
@@ -863,9 +865,9 @@
           <div class="rbb-cats">
             ${data.categories.slice(0, 3).map(c => `<button type="button" class="rbb-cat-pill" data-category="${escAttr(c.toLowerCase())}" title="Filter to ${escAttr(c)}">${esc(c)}</button>`).join('')}
           </div>
-          <div class="rbb-date-line">
-            <strong>${data.postedAbsolute ? esc(data.postedAbsolute) : 'Date unknown'}</strong>
-            ${data.postedRelative ? `<span class="rbb-relative">${esc(data.postedRelative)}</span>` : ''}
+          <div class="rbb-date-line" data-rbb-date-line>
+            <strong data-rbb-date-absolute>${data.postedAbsolute ? esc(data.postedAbsolute) : 'Date unknown'}</strong>
+            ${data.postedRelative ? `<span class="rbb-relative" data-rbb-relative>${esc(data.postedRelative)}</span>` : ''}
             ${data.author ? `<span>by ${esc(data.author)}</span>` : ''}
           </div>
         </div>
@@ -1137,6 +1139,8 @@
     card.dataset.mediaKind = mediaKindForData(data);
     card.dataset.hasRg = data.rgLinks.length ? '1' : '0';
     card.dataset.timestamp = data.timestamp ? String(data.timestamp) : '0';
+    card.dataset.urlKey = postKeyFromUrl(data.url);
+    card.__rbbData = data;
 
     setHTML(card, buildCardInnerHtml(data, isPostPage, isPostPage));
 
@@ -1455,6 +1459,7 @@
 
     const postedAbsolute = extractAbsoluteDate(meta, article);
     const postedDate = parsePostedDate(postedAbsolute);
+    const approximateDateOnly = isCompactMonthDayDate(postedAbsolute);
 
     const readableText = getReadableText(content);
     const postMeta = extractPostMeta(content);
@@ -1471,7 +1476,7 @@
       author,
       postedAbsolute,
       timestamp: postedDate ? postedDate.getTime() : 0,
-      postedRelative: postedDate ? relativeTime(postedDate) : '',
+      postedRelative: postedDate && !approximateDateOnly ? relativeTime(postedDate) : '',
       categories,
       tag,
       commentsUrl: comments ? abs(comments.href) : '',
@@ -2492,6 +2497,7 @@
         appendArticle(article, grid, doc);
       });
 
+      await hydrateFeedCardDates(grid);
       applyFiltersAndSort();
       refreshRecommendedRail();
       hidePosterWallsSafely();
@@ -2531,6 +2537,79 @@
 
   function fetchText(url) {
     return gmRequest({ method: 'GET', url }).then(response => response.responseText);
+  }
+
+  function getRssDateMap() {
+    if (!rssDateMapPromise) {
+      rssDateMapPromise = fetchText(abs('/feed/'))
+        .then(parseRssDateMap)
+        .catch(error => {
+          console.warn('RLSBB Prism: RSS date lookup failed', error);
+          return new Map();
+        });
+    }
+    return rssDateMapPromise;
+  }
+
+  function parseRssDateMap(xmlText) {
+    const doc = new DOMParser().parseFromString(xmlText, 'text/xml');
+    const map = new Map();
+
+    [...doc.querySelectorAll('item')].forEach(item => {
+      const link = cleanText(item.querySelector('link')?.textContent || '');
+      const title = cleanText(item.querySelector('title')?.textContent || '');
+      const pubDateText = cleanText(item.querySelector('pubDate')?.textContent || '');
+      const pubDate = new Date(pubDateText);
+      if (Number.isNaN(pubDate.getTime())) return;
+
+      const entry = {
+        timestamp: pubDate.getTime(),
+        relative: relativeTime(pubDate),
+        pubDate: pubDateText
+      };
+      const urlKey = postKeyFromUrl(link);
+      const titleKey = postKeyFromTitle(title);
+      if (urlKey) map.set(`url:${urlKey}`, entry);
+      if (titleKey) map.set(`title:${titleKey}`, entry);
+    });
+
+    return map;
+  }
+
+  async function hydrateFeedCardDates(grid) {
+    if (!grid || isPostPage) return;
+    const dateMap = await getRssDateMap();
+    if (!dateMap.size) return;
+
+    let updated = false;
+    [...grid.querySelectorAll('.rbb-card')].forEach(card => {
+      const data = card.__rbbData;
+      if (!data) return;
+
+      const rssDate = dateMap.get(`url:${postKeyFromUrl(data.url)}`) || dateMap.get(`title:${postKeyFromTitle(data.title)}`);
+      if (!rssDate) return;
+
+      data.timestamp = rssDate.timestamp;
+      data.postedRelative = rssDate.relative;
+      card.dataset.timestamp = String(rssDate.timestamp);
+
+      const relativeEl = card.querySelector('[data-rbb-relative]');
+      const dateLine = card.querySelector('[data-rbb-date-line]');
+      if (relativeEl) {
+        relativeEl.textContent = rssDate.relative;
+      } else if (dateLine) {
+        const pill = document.createElement('span');
+        pill.className = 'rbb-relative';
+        pill.dataset.rbbRelative = '';
+        pill.textContent = rssDate.relative;
+        const author = [...dateLine.children].find(child => /^by\s+/i.test(cleanText(child.textContent || '')));
+        dateLine.insertBefore(pill, author || null);
+      }
+      if (dateLine) dateLine.title = `RSS pubDate: ${rssDate.pubDate}`;
+      updated = true;
+    });
+
+    if (updated) applyFiltersAndSort();
   }
 
   // Prefixed console logging so the download flow is actually debuggable from DevTools —
@@ -3743,6 +3822,27 @@
     return null;
   }
 
+  function isCompactMonthDayDate(text) {
+    return /^[A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?$/i.test(cleanText(text));
+  }
+
+  function postKeyFromUrl(url) {
+    try {
+      const parsed = new URL(url, location.href);
+      return parsed.pathname.replace(/\/+$/, '').toLowerCase();
+    } catch {
+      return String(url || '').replace(/[#?].*$/, '').replace(/\/+$/, '').toLowerCase();
+    }
+  }
+
+  function postKeyFromTitle(title) {
+    return cleanText(title)
+      .toLowerCase()
+      .replace(/&amp;/g, '&')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
   function relativeTime(date) {
     const diffMs = Date.now() - date.getTime();
     const diffMinutes = Math.round(diffMs / 60000);
@@ -4437,12 +4537,16 @@
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-top {
         gap: 8px;
         align-items: center;
+        height: 30px;
       }
 
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-actions {
+        display: grid;
+        align-items: center;
         padding-top: 0;
         gap: 6px;
         align-self: center;
+        height: 30px;
       }
 
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-rg {
@@ -4451,6 +4555,7 @@
 
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-dl-btn {
         min-height: 28px;
+        height: 28px;
         padding: 5px 8px;
       }
 
@@ -4947,6 +5052,7 @@
         min-width: 0;
         align-items: center;
         align-self: center;
+        height: 30px;
       }
 
       .rbb-quality-block {
@@ -4954,8 +5060,14 @@
         display: flex;
         flex-direction: column;
         align-items: center;
+        justify-content: center;
         gap: 5px;
         min-width: 80px;
+      }
+
+      .rbb-card:not(.rbb-detail-card) .rbb-quality-block {
+        min-width: 76px;
+        height: 30px;
       }
 
       .rbb-detail-card .rbb-quality-block { gap: 7px; min-width: 96px; }
@@ -4986,16 +5098,22 @@
       }
 
       .rbb-size-badge {
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
         width: 76px;
         min-width: 76px;
+        min-height: 28px;
         text-align: center;
         border-radius: 8px;
-        padding: 5px 7px;
+        padding: 0 7px;
         color: #f7dca3;
         background: rgba(214,166,76,.12);
         border: 1px solid rgba(214,166,76,.24);
         font-size: 11px;
         font-weight: 1000;
+        line-height: 1;
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
       }
@@ -5068,10 +5186,14 @@
       }
 
       .rbb-card:not(.rbb-detail-card) .rbb-release-actions {
+        display: grid;
+        align-items: center;
         min-width: 0;
         padding-top: 0;
         border-top: 0;
         align-self: center;
+        height: 30px;
+        justify-content: center;
       }
 
       .rbb-detail-card .rbb-release-actions { padding-top: 12px; gap: 10px; }
@@ -5087,6 +5209,7 @@
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
         align-items: center;
         gap: 8px;
+        height: 30px;
       }
 
       .rbb-release-rg .rbb-dl-btn,
@@ -5098,6 +5221,7 @@
       .rbb-card:not(.rbb-detail-card) .rbb-dl-btn,
       .rbb-card:not(.rbb-detail-card) .rbb-dl-protected {
         min-height: 28px;
+        height: 28px;
         padding: 5px 8px;
         border-radius: 8px;
       }
