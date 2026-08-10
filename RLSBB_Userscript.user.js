@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.17
+// @version      2.8.18
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.17
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.17
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.18
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.18
 // ==/UserScript==
 
 (function () {
@@ -3715,7 +3715,20 @@
       .replace(/\s+at\s+/i, ' ')
       .trim();
 
-    let parsed = new Date(cleaned);
+    let parsed = null;
+    const monthDayOnly = cleaned.match(/^([A-Za-z]+)\s+(\d{1,2})$/);
+    if (monthDayOnly) {
+      const now = new Date();
+      parsed = new Date(`${monthDayOnly[1]} ${monthDayOnly[2]} ${now.getFullYear()} 00:00`);
+      if (!Number.isNaN(parsed.getTime())) {
+        if (parsed.getTime() - now.getTime() > 7 * 24 * 60 * 60 * 1000) {
+          parsed.setFullYear(parsed.getFullYear() - 1);
+        }
+        return parsed;
+      }
+    }
+
+    parsed = new Date(cleaned);
     if (!Number.isNaN(parsed.getTime())) return parsed;
 
     const match = cleaned.match(/^([A-Za-z]+)\s+(\d{1,2}),?\s+(\d{4})?\s*(\d{1,2}:\d{1,2})\s*(am|pm)?$/i);
@@ -4423,11 +4436,13 @@
 
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-top {
         gap: 8px;
+        align-items: center;
       }
 
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-actions {
-        padding-top: 7px;
+        padding-top: 0;
         gap: 6px;
+        align-self: center;
       }
 
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-release-rg {
@@ -4435,8 +4450,8 @@
       }
 
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-dl-btn {
-        min-height: 34px;
-        padding: 7px 8px;
+        min-height: 28px;
+        padding: 5px 8px;
       }
 
       .rbb-card-portrait-media:not(.rbb-detail-card) .rbb-dl-label {
@@ -4930,6 +4945,8 @@
 
       .rbb-card:not(.rbb-detail-card) .rbb-release-top {
         min-width: 0;
+        align-items: center;
+        align-self: center;
       }
 
       .rbb-quality-block {
@@ -5054,6 +5071,7 @@
         min-width: 0;
         padding-top: 0;
         border-top: 0;
+        align-self: center;
       }
 
       .rbb-detail-card .rbb-release-actions { padding-top: 12px; gap: 10px; }
@@ -5067,6 +5085,7 @@
       .rbb-card:not(.rbb-detail-card) .rbb-release-rg {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        align-items: center;
         gap: 8px;
       }
 
