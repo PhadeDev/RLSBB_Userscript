@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.19
+// @version      2.8.21
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.19
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.19
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.21
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.21
 // ==/UserScript==
 
 (function () {
@@ -874,16 +874,19 @@
 
         ${detail && data.notice ? `<div class="rbb-notice-card">&#9888; ${esc(data.notice)}</div>` : ''}
 
-        ${detail ? makePostMetaHtml(data) : (data.description ? `<p class="rbb-description">${esc(data.description)}</p>` : '')}
-
-        <section class="rbb-release-list">
-          <div class="rbb-release-heading">
-            <h3>Best RapidGator version</h3>
-            <span>${data.releases.length} found</span>
-          </div>
-          ${bestRow}
-          ${showAll}
-        </section>
+        ${detail
+          ? makeDetailSectionsHtml(data, bestRow, showAll)
+          : `
+            ${data.description ? `<p class="rbb-description">${esc(data.description)}</p>` : ''}
+            <section class="rbb-release-list">
+              <div class="rbb-release-heading">
+                <h3>Best RapidGator version</h3>
+                <span>${data.releases.length} found</span>
+              </div>
+              ${bestRow}
+              ${showAll}
+            </section>
+          `}
 
         ${includeCommentsFooter ? `
         <details class="rbb-comments" data-comments-url="${escAttr(data.commentsUrl || data.url + '#comments')}" open>
@@ -1283,7 +1286,8 @@
 
   // Plot/genre/ratings/cast block for the detail view (post page + lightbox) -- the compact
   // feed card never shows this, only its title/badges/best-release stay visible there.
-  function makePostMetaHtml(data) {
+  function makePostMetaHtml(data, includeSynopsis = true) {
+    const synopsis = data.plot || data.description || '';
     const ratingRows = [
       ['IMDB', data.ratingImdb],
       ['TMDB', data.ratingTmdb],
@@ -1291,13 +1295,13 @@
       ['Metacritic', data.ratingMetacritic]
     ].filter(([, value]) => value && value.toUpperCase() !== 'N/A');
 
-    const hasAnything = data.plot || data.genre || data.director || data.cast || ratingRows.length
+    const hasAnything = (includeSynopsis && synopsis) || data.genre || data.director || data.cast || ratingRows.length
       || data.trailerUrl || data.steamUrl || data.nfoUrl || data.homepageUrl || data.hasTvdb;
     if (!hasAnything) return '';
 
     return `
       <section class="rbb-post-meta">
-        ${data.plot ? `<p class="rbb-post-plot">${esc(data.plot)}</p>` : ''}
+        ${includeSynopsis && synopsis ? `<p class="rbb-post-plot">${esc(synopsis)}</p>` : ''}
         ${(ratingRows.length || data.trailerUrl) ? `
           <div class="rbb-rating-row">
             ${ratingRows.map(([label, value]) => {
@@ -1323,6 +1327,60 @@
           ${data.genre ? `<div><strong>Genre:</strong> ${esc(data.genre)}</div>` : ''}
           ${data.director ? `<div><strong>Director:</strong> ${esc(data.director)}</div>` : ''}
           ${data.cast ? `<div><strong>Starring:</strong> ${esc(data.cast)}</div>` : ''}
+        </div>
+      </section>
+    `;
+  }
+
+  function makeDetailSectionsHtml(data, bestRow, showAll) {
+    const synopsis = data.plot || data.description || '';
+    const tabBase = `rbb-tabs-${safeDomId(data.id || data.url || data.title)}`;
+    const overviewId = `${tabBase}-overview`;
+    const downloadsId = `${tabBase}-downloads`;
+    const infoId = `${tabBase}-info`;
+    const rawId = `${tabBase}-raw`;
+    const infoHtml = makePostMetaHtml(data, false);
+    const rawText = cleanText(data.rawText || data.fullText || '');
+
+    return `
+      <section class="rbb-detail-tabs">
+        <input class="rbb-tab-input" type="radio" name="${escAttr(tabBase)}" id="${escAttr(overviewId)}" checked>
+        <input class="rbb-tab-input" type="radio" name="${escAttr(tabBase)}" id="${escAttr(downloadsId)}">
+        <input class="rbb-tab-input" type="radio" name="${escAttr(tabBase)}" id="${escAttr(infoId)}">
+        <input class="rbb-tab-input" type="radio" name="${escAttr(tabBase)}" id="${escAttr(rawId)}">
+
+        <div class="rbb-tab-labels">
+          <label for="${escAttr(overviewId)}">Overview</label>
+          <label for="${escAttr(downloadsId)}">Downloads</label>
+          <label for="${escAttr(infoId)}">Info</label>
+          <label for="${escAttr(rawId)}">Raw</label>
+        </div>
+
+        <div class="rbb-tab-panel rbb-tab-overview">
+          ${synopsis
+            ? `<p class="rbb-post-plot">${esc(synopsis)}</p>`
+            : `<p class="rbb-muted">No synopsis found in the post or RSS feed.</p>`}
+        </div>
+
+        <div class="rbb-tab-panel rbb-tab-downloads">
+          <section class="rbb-release-list">
+            <div class="rbb-release-heading">
+              <h3>Best RapidGator version</h3>
+              <span>${data.releases.length} found</span>
+            </div>
+            ${bestRow}
+            ${showAll}
+          </section>
+        </div>
+
+        <div class="rbb-tab-panel rbb-tab-info">
+          ${infoHtml || `<p class="rbb-muted">No extra info fields found.</p>`}
+        </div>
+
+        <div class="rbb-tab-panel rbb-tab-raw">
+          ${rawText
+            ? `<pre class="rbb-raw-text">${esc(rawText)}</pre>`
+            : `<p class="rbb-muted">No raw post text captured.</p>`}
         </div>
       </section>
     `;
@@ -1488,6 +1546,7 @@
       ...postMeta,
       notice,
       cardBadges,
+      rawText: readableText,
       fullText: article.textContent || ''
     };
   }
@@ -1886,8 +1945,24 @@
   }
 
   function extractDescription(content) {
+    const tvDescription = [...content.querySelectorAll('p')]
+      .map(p => {
+        const clone = p.cloneNode(true);
+        clone.querySelectorAll('script, iframe, style, img').forEach(n => n.remove());
+        clone.querySelectorAll('br').forEach(br => br.replaceWith(' '));
+        return cleanText(clone.textContent || '');
+      })
+      .find(text => {
+        if (!text || text.length < 25) return false;
+        if (/rapidgator|nitroflare|download|single file|release name\s*:|links\s*:/i.test(text)) return false;
+        return /\bseason\s+\d+\s*,?\s*episode\s+\d+\b/i.test(text);
+      });
+
+    if (tvDescription) return tvDescription;
+
     const clone = content.cloneNode(true);
     clone.querySelectorAll('script, iframe, style, img, a').forEach(n => n.remove());
+    clone.querySelectorAll('br').forEach(br => br.replaceWith(' '));
 
     const paragraphs = [...clone.querySelectorAll('p')]
       .map(p => cleanText(p.textContent))
@@ -1895,6 +1970,7 @@
 
     return paragraphs.find(p => {
       if (/^(links|download|single file|nfo|subtitles|mkv|mp4|avi|release name|size|video|audio):/i.test(p)) return false;
+      if (/rapidgator|nitroflare|download|single file|release name\s*:|links\s*:/i.test(p)) return false;
       if (/\b(MKV|MP4|AVI|RAR|ISO)\b\s*\|/i.test(p)) return false;
       if (looksLikeReleaseName(p)) return false;
       return p.length > 45;
@@ -2559,13 +2635,16 @@
       const link = cleanText(item.querySelector('link')?.textContent || '');
       const title = cleanText(item.querySelector('title')?.textContent || '');
       const pubDateText = cleanText(item.querySelector('pubDate')?.textContent || '');
+      const description = extractRssItemDescription(item);
       const pubDate = new Date(pubDateText);
       if (Number.isNaN(pubDate.getTime())) return;
 
       const entry = {
         timestamp: pubDate.getTime(),
         relative: relativeTime(pubDate),
-        pubDate: pubDateText
+        pubDate: pubDateText,
+        title,
+        description
       };
       const urlKey = postKeyFromUrl(link);
       const titleKey = postKeyFromTitle(title);
@@ -2574,6 +2653,24 @@
     });
 
     return map;
+  }
+
+  function extractRssItemDescription(item) {
+    const encodedNode = [...item.children].find(child => child.localName === 'encoded' || child.nodeName.toLowerCase() === 'content:encoded');
+    const html = encodedNode?.textContent || item.querySelector('description')?.textContent || '';
+    if (!html) return '';
+
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const container = doc.body || doc;
+    const fromPostExtractor = extractDescription(container);
+    if (fromPostExtractor) return fromPostExtractor;
+
+    const text = cleanText(container.textContent || '');
+    if (!text) return '';
+    return text
+      .split(/\b(?:Links|Download|Single File RAR)\s*:/i)[0]
+      .replace(/\s*\b(?:MKV|MP4|AVI|RAR|ISO)\b\s*\|.*$/i, '')
+      .trim();
   }
 
   async function hydrateFeedCardDates(grid) {
@@ -2591,6 +2688,9 @@
 
       data.timestamp = rssDate.timestamp;
       data.postedRelative = rssDate.relative;
+      if (rssDate.description && (!data.description || rssDate.description.length > data.description.length)) {
+        data.description = rssDate.description;
+      }
       card.dataset.timestamp = String(rssDate.timestamp);
 
       const relativeEl = card.querySelector('[data-rbb-relative]');
@@ -2606,6 +2706,8 @@
         dateLine.insertBefore(pill, author || null);
       }
       if (dateLine) dateLine.title = `RSS pubDate: ${rssDate.pubDate}`;
+      const compactDescription = card.querySelector('.rbb-description');
+      if (compactDescription && data.description) compactDescription.textContent = data.description;
       updated = true;
     });
 
@@ -3843,6 +3945,15 @@
       .trim();
   }
 
+  function safeDomId(value) {
+    const base = String(value || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 80);
+    return base || `item-${Math.random().toString(36).slice(2, 9)}`;
+  }
+
   function relativeTime(date) {
     const diffMs = Date.now() - date.getTime();
     const diffMinutes = Math.round(diffMs / 60000);
@@ -4781,6 +4892,76 @@
         -webkit-line-clamp: initial;
         overflow: visible;
         max-width: 65ch;
+      }
+
+      .rbb-detail-tabs {
+        display: grid;
+        gap: 10px;
+        margin: 8px 0 12px;
+      }
+
+      .rbb-tab-input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .rbb-tab-labels {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+
+      .rbb-tab-labels label {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 30px;
+        padding: 6px 13px;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,.09);
+        background: rgba(255,255,255,.055);
+        color: #cbd8e5;
+        font-size: 12px;
+        font-weight: 850;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .rbb-detail-tabs:has(.rbb-tab-input:nth-of-type(1):checked) .rbb-tab-labels label:nth-of-type(1),
+      .rbb-detail-tabs:has(.rbb-tab-input:nth-of-type(2):checked) .rbb-tab-labels label:nth-of-type(2),
+      .rbb-detail-tabs:has(.rbb-tab-input:nth-of-type(3):checked) .rbb-tab-labels label:nth-of-type(3),
+      .rbb-detail-tabs:has(.rbb-tab-input:nth-of-type(4):checked) .rbb-tab-labels label:nth-of-type(4) {
+        color: #101820;
+        background: linear-gradient(135deg, #7dd3fc, #e6f6ff);
+        border-color: rgba(125,211,252,.55);
+      }
+
+      .rbb-tab-panel {
+        display: none;
+        min-width: 0;
+      }
+
+      .rbb-detail-tabs:has(.rbb-tab-input:nth-of-type(1):checked) .rbb-tab-overview,
+      .rbb-detail-tabs:has(.rbb-tab-input:nth-of-type(2):checked) .rbb-tab-downloads,
+      .rbb-detail-tabs:has(.rbb-tab-input:nth-of-type(3):checked) .rbb-tab-info,
+      .rbb-detail-tabs:has(.rbb-tab-input:nth-of-type(4):checked) .rbb-tab-raw {
+        display: block;
+      }
+
+      .rbb-raw-text {
+        max-height: 280px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        margin: 0;
+        padding: 12px 14px;
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,.07);
+        background: rgba(0,0,0,.22);
+        color: #c9d6e2;
+        font-size: 11px;
+        line-height: 1.5;
       }
 
       .rbb-post-meta {
