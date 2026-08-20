@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.21
+// @version      2.8.22
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.21
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.21
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.22
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.22
 // ==/UserScript==
 
 (function () {
@@ -64,7 +64,10 @@
   }
 
   const STORAGE_KEY = 'rbbCleanBoard.v11';
-  const TMDB_CACHE_KEY = 'tmdbArtworkCache.v1';
+  // v2 fixes the old TV cache identity, which omitted the episode number. That made every
+  // episode in one season reuse whichever display title populated the cache first (for
+  // example, S02E08/S02E09 both visibly became S02E10 even though their post data was right).
+  const TMDB_CACHE_KEY = 'tmdbArtworkCache.v2';
   const TMDB_CACHE_MAX_AGE = 90 * 24 * 60 * 60 * 1000;
   const TMDB_MISS_MAX_AGE = 14 * 24 * 60 * 60 * 1000;
   const TMDB_POSTER_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
@@ -987,7 +990,8 @@
   function tmdbCacheKey(data) {
     const parsed = parseMediaSearch(data);
     const mode = artworkModeForKind(parsed.kind);
-    return [parsed.kind, mode, parsed.query.toLowerCase(), parsed.year || '', parsed.scope, parsed.season || ''].join('|');
+    return [parsed.kind, mode, parsed.query.toLowerCase(), parsed.year || '', parsed.scope,
+      parsed.season || '', parsed.episode || ''].join('|');
   }
 
   function getTmdbCache() {
@@ -1119,7 +1123,13 @@
 
   function applyTmdbDisplayTitle(card, data, artwork) {
     const parsed = parseMediaSearch(data);
-    const cleanTitle = cleanText(artwork?.displayTitle || tmdbDisplayTitle(artwork?.title || '', parsed, artwork?.year || parsed.year));
+    // Never trust an episode suffix stored alongside shared artwork. Rebuild the display title
+    // from this card's own parsed SxxEyy token, using TMDB only for the canonical series name.
+    // This remains defensive even if an old/bad cache entry is manually restored later.
+    const reconstructed = artwork?.title
+      ? tmdbDisplayTitle(artwork.title, parsed, artwork?.year || parsed.year)
+      : artwork?.displayTitle;
+    const cleanTitle = cleanText(reconstructed || '');
     if (!cleanTitle) return;
     const link = card.querySelector('.rbb-card-title a');
     if (!link) return;
