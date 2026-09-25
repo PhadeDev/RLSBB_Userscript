@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         RLSBB Prism
 // @namespace    https://chatgpt.local/rlsbb-clean-v11
-// @version      2.8.22
+// @version      2.8.23
 // @description  RLSBB media-card interface with artwork modes, quality filters, post lightbox, RapidGator/AllDebrid download buttons, protected.to helpers, homepage recommendations, infinite scroll, and a site-wide magnet-link helper.
 // @author       Personal
 // @match        https://rlsbb.in/*
@@ -32,8 +32,8 @@
 // @grant        GM_info
 // @grant        GM_setClipboard
 // @run-at       document-end
-// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.22
-// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.22
+// @downloadURL  https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.23
+// @updateURL    https://raw.githubusercontent.com/PhadeDev/RLSBB_Userscript/main/RLSBB_Userscript.user.js?v=2.8.23
 // ==/UserScript==
 
 (function () {
@@ -401,8 +401,16 @@
 
     if (mode === 'browser') {
       const { localAria2Dir } = getDownloadSettings();
-      const destDir = window.prompt('Save to folder (on this PC):', localAria2Dir || '/home/Phaderon/Downloads');
-      if (destDir === null) return;
+      status.textContent = 'Opening Windows folder picker...';
+      let destDir;
+      try {
+        destDir = await chooseLocalDownloadFolder(localAria2Dir);
+      } catch (error) {
+        status.textContent = error.message || 'Could not open folder picker';
+        status.classList.add('rbb-dl-error');
+        return;
+      }
+      if (!destDir) { status.textContent = ''; return; }
 
       beginDownloadOp();
       button.disabled = true;
@@ -422,6 +430,7 @@
         status.textContent = `Sent to tray ✓ job ${accepted.job_id}`;
         status.title = `Tray log: ${accepted.log || ''}`;
         setSetting('localAria2Dir', destDir);
+        showLocalHandoffProgress(accepted, status);
       } catch (error) {
         logError('RapidGator tray handoff failed:', error);
         status.textContent = error.message || 'Tray handoff failed';
@@ -2937,13 +2946,18 @@
       source_url: location.href
     });
     log('Submitting local handoff job to tray:', kind, suggestedName, downloadDir);
-    const response = await gmRequest({
-      method: 'POST',
-      url: LOCAL_HANDOFF_API,
-      data: body,
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
-    });
+    let response;
+    try {
+      response = await gmRequest({
+        method: 'POST',
+        url: LOCAL_HANDOFF_API,
+        data: body,
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 10000
+      });
+    } catch {
+      throw new Error('Could not reach RLSBB Tray. Make sure the tray app is running and up to date.');
+    }
     let json;
     try {
       json = JSON.parse(response.responseText);
@@ -2954,6 +2968,75 @@
       throw new Error(json.error || 'Tray rejected the local download job.');
     }
     return json;
+  }
+
+  async function chooseLocalDownloadFolder(initialDir) {
+    let response;
+    try {
+      response = await gmRequest({
+        method: 'POST',
+        url: 'http://127.0.0.1:8771/api/select-local-download-folder',
+        data: JSON.stringify({ initial_dir: initialDir || '' }),
+        headers: { 'Content-Type': 'application/json' }
+      });
+    } catch {
+      throw new Error('Could not reach RLSBB Tray. Make sure the tray app is running and up to date.');
+    }
+    let json;
+    try {
+      json = JSON.parse(response.responseText);
+    } catch {
+      throw new Error('RLSBB Tray returned an unreadable folder-picker response.');
+    }
+    if (!json.ok) throw new Error(json.error || 'RLSBB Tray could not open the folder picker.');
+    return json.cancelled ? null : json.path;
+  }
+
+  async function monitorLocalHandoffJob(jobId, onUpdate) {
+    while (true) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      let response;
+      try {
+        response = await gmRequest({
+          method: 'GET',
+          url: `${LOCAL_HANDOFF_API}/${encodeURIComponent(jobId)}`,
+          timeout: 10000
+        });
+      } catch {
+        throw new Error('Lost contact with RLSBB Tray while checking the download.');
+      }
+      let job;
+      try {
+        job = JSON.parse(response.responseText);
+      } catch {
+        throw new Error('RLSBB Tray returned an unreadable job status.');
+      }
+      if (!job.ok) throw new Error(job.error || 'RLSBB Tray could not find this job.');
+      onUpdate(job);
+      if (job.state === 'complete' || job.state === 'partial' || job.state === 'failed') return job;
+    }
+  }
+
+  function showLocalHandoffProgress(accepted, status) {
+    monitorLocalHandoffJob(accepted.job_id, job => {
+      status.textContent = job.message || `Tray job: ${job.state}`;
+      const hasError = job.state === 'failed' || job.state === 'partial';
+      status.classList.toggle('rbb-dl-error', hasError);
+      status.style.color = hasError ? '#c0392b' : '';
+      if (job.state === 'complete' || job.state === 'partial' || job.state === 'failed') {
+        setTimeout(() => {
+          status.textContent = '';
+          status.style.color = '';
+          status.title = '';
+          status.classList.remove('rbb-dl-error');
+        }, 15000);
+      }
+    }).catch(error => {
+      logError('Tray job status check failed:', error);
+      status.textContent = error.message || 'Could not check tray job';
+      status.classList.add('rbb-dl-error');
+      status.style.color = '#c0392b';
+    });
   }
 
   // ---- AllDebrid magnet caching ----
@@ -3228,8 +3311,16 @@
     let destDir = '';
     if (mode === 'local-aria2') {
       const { localAria2Dir } = getDownloadSettings();
-      destDir = window.prompt('Save to folder (on this PC):', localAria2Dir || '/home/Phaderon/Downloads');
-      if (destDir === null) return; // cancelled
+      status.textContent = 'Opening Windows folder picker...';
+      try {
+        destDir = await chooseLocalDownloadFolder(localAria2Dir);
+      } catch (error) {
+        logError('Tray folder picker failed:', error);
+        status.textContent = error.message || 'Could not open folder picker';
+        status.style.color = '#c0392b';
+        return;
+      }
+      if (!destDir) { status.textContent = ''; return; }
       beginDownloadOp();
       buttons.forEach(b => { b.disabled = true; });
       status.textContent = 'Sending job to tray…';
@@ -3240,6 +3331,7 @@
         status.textContent = `Sent to tray ✓ job ${accepted.job_id}`;
         status.title = `Tray log: ${accepted.log || ''}`;
         setSetting('localAria2Dir', destDir);
+        showLocalHandoffProgress(accepted, status);
       } catch (error) {
         logError('Tray local handoff failed:', error);
         status.textContent = error.message || 'Tray handoff failed';
@@ -3248,7 +3340,6 @@
         endDownloadOp();
         buttons.forEach(b => { b.disabled = false; });
         if (progress) progress.classList.remove('rbb-magnet-progress-active');
-        setTimeout(() => { status.textContent = ''; status.style.color = ''; status.title = ''; }, 15000);
       }
       return;
     }
